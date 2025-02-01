@@ -15,7 +15,29 @@ import random
 from mistic.utility import combined_rank, kernelWrapper, score_svr, score_svc, dotdict, svc_dec2, rank_items
 
 class svmSet():
-        
+    """
+    A class used to represent a set of Support Vector Machines (SVMs) for feature selection.
+
+    Attributes
+    ----------
+    SVM : object
+        An instance of an SVM model.
+    cv : object
+        Cross-validation set.
+    score : function
+        Method to score the SVM.
+    kernel : function, optional
+        Kernel function to be used by the SVM (default is kernelWrapper().compute).
+    separate_feature_sets : bool, optional
+        Flag to indicate if separate feature sets should be used (default is False).
+    separate_parameters : bool, optional
+        Flag to indicate if separate parameters should be used (default is False).
+
+    Methods
+    -------
+    __init__(self, SVM, cvSet, score_method, kernel=kernelWrapper().compute, separate_feature_sets=False, separate_parameters=False)
+        Initializes the svmSet with the given parameters.
+    """   
     def __init__(self, SVM, cvSet, score_method, 
                  kernel = kernelWrapper().compute,
                  separate_feature_sets = False,
