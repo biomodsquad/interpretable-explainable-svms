@@ -40,33 +40,22 @@ class svmSet():
     """   
     def __init__(self, SVM, cvSet, score_method, 
                  kernel = kernelWrapper().compute,
-                 separate_feature_sets = False,
-                 separate_parameters = False,
-                 sparse_kernel_matrix = False):
+                 separate_weight_sets = False,
+                 separate_parameters = False):
+        
         self.SVM = SVM
         self.cv = cvSet
-        
-        self.num_samples = self.cv.X.shape[0]
-        self.num_models = len(self.cv.train)
-        self.separate_feature_sets = separate_feature_sets
+        self.score = score_method
         self.separate_parameters = separate_parameters
-        
-        if self.separate_feature_sets:
-            self.features = []
-            self.removed_features_ = []
-            for i in range(self.num_models):
-                self.features.append(np.array([f for f in range(self.cv.X.shape[1])]))
-                self.removed_features_.append([])
-        else:
-            self.features = np.array([f for f in range(self.cv.X.shape[1])])
-            self.removed_features_ = []
-
-        self.sparse_kernel_matrix = sparse_kernel_matrix
-            
         self.kernel = kernel
         self._reset_kernel_matrix()
-    
-        self.score = score_method
+
+        if separate_weight_sets:
+            self.weights = []
+            for i in range(self.num_models):
+                self.weights.append(np.ones(self.cv.X.shape[1]))
+        else:
+            self.weights = np.ones(self.cv.X.shape[1])
 
         self.models = []
         self.X_ind = []
@@ -74,10 +63,15 @@ class svmSet():
             self.models.append(copy.deepcopy(self.SVM))
             self.X_ind.append(self.cv.train[i])
     
+    def num_samples(self):
+        return(self.cv.X.shape[0])
+
+    def num_models(self):
+        return(len(self.cv.train))
     
     def _train_models(self):
         for i in range(self.num_models):
-            if self.separate_feature_sets | self.separate_parameters:
+            if isinstance(self.weights,list) | isinstance(self.parameters_,list):
                 kernel_matrix = self._get_kernel_matrix(self.X_ind[i],self.X_ind[i],model_index = i)
             else:
                 kernel_matrix = self._get_kernel_matrix(self.X_ind[i],self.X_ind[i])
@@ -86,55 +80,29 @@ class svmSet():
 
     
     def _update_kernel_matrix(self):
-        if self.separate_feature_sets | self.separate_parameters | self.sparse_kernel_matrix:
-            for i in range(self.num_models):     
-                if self.separate_feature_sets:
-                    features = self.features[i]
+        if isinstance(self.weights,list) | isinstance(self.parameters_,list):
+            for i in range(self.num_models()):     
+                if isinstance(self.weights,list):
+                    weights = self.weights[i]
                 else:
-                    features = self.features
+                    weights = self.weights
                     
                 if isinstance(self.parameters_,list):
                     parameters = self.parameters_[i].kernel
                 else:
                     parameters = self.parameters_.kernel
                     
-                if self.sparse_kernel_matrix:
-                    training_kernel = self.kernel.compute(self.cv.X[self.cv.train[i], :], 
-                                                          feature_index = features, 
-                                                          parameters = parameters)
-                
-                    for j in range(len(self.cv.train[i])):
-                        if self.separate_feature_sets | self.separate_parameters:
-                            self.kernel_matrix_[i][self.cv.train[i][j],self.cv.train[i]] = training_kernel[j,:]
-                        else:
-                            self.kernel_matrix_[self.cv.train[i][j],self.cv.train[i]] = training_kernel[j,:]
-
-                    testing_kernel = self.kernel.compute(self.cv.X[self.cv.test[i], :], 
-                                                         feature_index = features, 
-                                                         parameters = parameters,
-                                                         Y = self.cv.X[self.cv.train[i], :])
-                
-                    for j in range(len(self.cv.test[i])):
-                        if self.separate_feature_sets | self.separate_parameters:
-                            self.kernel_matrix_[i][self.cv.test[i][j],self.cv.train[i]] = testing_kernel[j,:]
-                        else:
-                            self.kernel_matrix_[self.cv.test[i][j],self.cv.train[i]] = testing_kernel[j,:]
-                        
-                else:
-                    self.kernel_matrix_[i] = self.kernel.compute(self.cv.X, 
-                                                             feature_index = features, 
+                self.kernel_matrix_[i] = self.kernel.compute(self.cv.X, 
+                                                             feature_weights = weights, 
                                                              parameters = parameters)
         else:
             self.kernel_matrix_ = self.kernel.compute(self.cv.X, 
-                                                      feature_index = self.features, 
+                                                      feature_weights = self.weights, 
                                                       parameters = self.parameters_.kernel)
 
     
     def _reset_kernel_matrix(self):
-        if self.sparse_kernel_matrix:
-            empty_matrix = dok_matrix((self.num_samples, self.num_samples))
-        else: 
-            empty_matrix = np.zeros((self.num_samples, self.num_samples))
+        empty_matrix = np.zeros((self.num_samples, self.num_samples))
             
         if self.separate_feature_sets | self.separate_parameters:
             self.kernel_matrix_ = []      
@@ -150,12 +118,7 @@ class svmSet():
         else:
             kernel_matrix = self.kernel_matrix_[indices_1, :][:, indices_2]
 
-        if self.sparse_kernel_matrix:
-            returned_matrix = np.asarray(kernel_matrix.todense())
-        else:
-            returned_matrix = kernel_matrix
-
-        return returned_matrix
+        return kernel_matrix
 
     
     def _score_models(self):  
@@ -175,11 +138,7 @@ class svmSet():
             self.performance_ = accuracy
             
             for i in range(self.num_models):
-                if isinstance(self.parameters_,list):
-                    parameters = self.parameters_[i]
-                else:
-                    parameters = self.parameters_
-
+                parameters = self.parameters_[i]
                 self.performance_[i] = dotdict(self.performance_[i])
                 self.performance_[i].update(parameters.model) 
                 self.performance_[i].update(parameters.kernel)
@@ -298,12 +257,13 @@ class svmSet():
         feature_performance = {}
         result = 0
         best_score = -1e12
+
         if self.separate_feature_sets:
             n_feats = len(self.features[0])
         else:
             n_feats = len(self.features)
             
-        while(n_feats >= 2) :
+        while(n_feats >= 2):
             self.tune_models(parameter_grid)
 
             if self.separate_parameters:
