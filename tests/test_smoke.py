@@ -31,7 +31,7 @@ def _fitted_ensemble():
 def test_public_api_and_version():
     assert mistic.__version__ == "0.1.0"
     assert set(mistic.__all__) == {
-        "combined_rank", "cvSet", "kernelWrapper", "paramSet",
+        "combined_rank", "cvSet", "kernelWrapper", "paramSet", "perDiff",
         "score_svc", "score_svr", "svmSet",
     }
 

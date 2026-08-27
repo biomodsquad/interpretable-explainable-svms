@@ -2,7 +2,7 @@
 
 from .cvSet import cvSet
 from .svmSet import svmSet
-from .utility import combined_rank, kernelWrapper, paramSet, score_svc, score_svr
+from .utility import combined_rank, kernelWrapper, paramSet, perDiff, score_svc, score_svr
 
 __version__ = "0.1.0"
 
@@ -11,6 +11,7 @@ __all__ = [
     "cvSet",
     "kernelWrapper",
     "paramSet",
+    "perDiff",
     "score_svc",
     "score_svr",
     "svmSet",
