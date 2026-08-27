@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mistic-svm"
+version = "0.1.0"
+description = "Feature selection and attribution for interpretable support vector machines"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+  { name = "BioModSquad", email = "group@biomodsquad.org" },
+]
+keywords = ["machine learning", "support vector machine", "feature selection", "explainability", "interpretability"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "matplotlib>=3.7",
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "scikit-learn>=1.4",
+  "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "pytest>=8",
+  "ruff>=0.6",
+  "sphinx>=7",
+  "twine>=5",
+]
+
+[project.urls]
+Homepage = "https://github.com/biomodsquad/interpretable-explainable-svms"
+Repository = "https://github.com/biomodsquad/interpretable-explainable-svms"
+Issues = "https://github.com/biomodsquad/interpretable-explainable-svms/issues"
+
+[tool.setuptools.packages.find]
+include = ["mistic*"]
+exclude = ["mistic.examples*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100

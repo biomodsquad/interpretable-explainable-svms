@@ -1,21 +1,39 @@
-# Interpretable and Explainable SVMs
+# MISTIC
 
-`mistic` is a Python package for support-vector-machine feature selection and
-attribution.
+MISTIC provides feature selection and attribution for interpretable and
+explainable support vector machines.
 
 ## Installation
 
-From the repository root, install the package and its dependencies in editable
+Install the release from PyPI:
+
+```bash
+python -m pip install mistic-svm
+```
+
+The PyPI distribution is named `mistic-svm` because `mistic` is already used
+by an unrelated project. The Python import remains concise:
+
+```python
+from mistic import cvSet, kernelWrapper, paramSet, score_svc, svmSet
+```
+
+For development, install the repository and its development tools in editable
 mode:
 
 ```bash
-python -m pip install -e .
+python -m pip install -e ".[dev]"
 ```
 
 The package requires Python 3.10 or newer. Example classification and
 regression workflows are available in `mistic/examples`.
 
+## Documentation and tests
+
+Build the API documentation with `sphinx-build -W docs docs/_build/html` and
+run the test suite with `pytest`.
+
 ## Repository
 
-The canonical repository is
+The canonical source repository is
 [biomodsquad/interpretable-explainable-svms](https://github.com/biomodsquad/interpretable-explainable-svms).
