@@ -1,3 +1,5 @@
+"""Scoring, ranking, kernel, and optimization helpers used by MISTIC."""
+
 import numpy as np
 import pandas as pd
 import copy
@@ -11,13 +13,42 @@ from scipy.spatial.distance import squareform
 import random
 
 class combined_rank():
+    """Combine perturbation-based and kernel feature rankings."""
 
     def __init__(self,weight=0.75, number_samples = 100, random_seed = 0):
+        """Configure ranking weights and synthetic-sampling behavior.
+
+        Parameters
+        ----------
+        weight : float, default=0.75
+            Weight assigned to the perturbation rank; the kernel rank receives
+            ``1 - weight``.
+        number_samples : int, default=100
+            Number of synthetic samples used when ranking on ``"sample"``.
+        random_seed : int, default=0
+            Seed used to generate synthetic samples.
+        """
         self.weight = weight
         self.number_samples = number_samples
         self.random_seed = random_seed
 
     def compute(self,svmSet,model_index,set_for_rank):
+        """Return a consensus rank for the active features.
+
+        Parameters
+        ----------
+        svmSet : mistic.svmSet.svmSet
+            Trained model ensemble.
+        model_index : int
+            Cross-validation model to explain.
+        set_for_rank : {"train", "test", "sample"}
+            Data used to calculate perturbation contributions.
+
+        Returns
+        -------
+        numpy.ndarray
+            Zero-based rank for each active feature; lower values rank first.
+        """
         if set_for_rank == "sample":
             np.random.seed(self.random_seed)
             X_for_rank = np.zeros([self.number_samples, svmSet.cv.X.shape[1]])
@@ -42,27 +73,46 @@ class combined_rank():
 
                             
 class dotdict(dict):
-    """dot.notation access to dictionary attributes"""
+    """Dictionary supporting attribute-style access."""
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
 
     def __deepcopy__(self, memo=None):
+        """Return a recursively copied :class:`dotdict`."""
         return dotdict(copy.deepcopy(dict(self), memo=memo))
 
 
 class paramSet():
+    """Pair estimator parameters with kernel parameters.
+
+    Parameters
+    ----------
+    model : dict
+        Parameters assigned to each scikit-learn estimator.
+    kernel : dict
+        Parameters passed to the selected pairwise kernel.
+    """
+
     def __init__(self,model, kernel):
+        """Store model and kernel parameter mappings."""
         self.model = model
         self.kernel = kernel
 
 
 class score_svc():
+    """Score binary SVC models using weighted AUC and F1."""
 
     def __init__(self, weight=0.5):
+        """Set the AUC weight; F1 receives ``1 - weight``."""
         self.weight = weight
 
     def score(self,svmSet,model_index):
+        """Score one fitted classification model.
+
+        Returns a mapping containing ``f1``, ``auc``, and their weighted
+        aggregate ``score``.
+        """
         if svmSet.separate_feature_sets | svmSet.separate_parameters:
             kernel_matrix = svmSet._get_kernel_matrix(svmSet.cv.test[model_index],
                                                       svmSet.X_ind[model_index],
@@ -99,11 +149,18 @@ class score_svc():
 
 
 class score_svr():
+    """Score SVR models using correlation, R², and RMSE."""
 
     def __init__(self, weight=0.5):
+        """Set the squared-Pearson weight; R² receives ``1 - weight``."""
         self.weight = weight
 
     def score(self,svmSet,model_index):
+        """Score one fitted regression model.
+
+        Returns a mapping containing ``rmse``, squared ``pearson``, ``r2``,
+        and the weighted aggregate ``score``.
+        """
         if svmSet.separate_feature_sets | svmSet.separate_parameters:
             kernel_matrix = svmSet._get_kernel_matrix(svmSet.cv.test[model_index],
                                                       svmSet.X_ind[model_index],
@@ -128,12 +185,27 @@ class score_svr():
         return {'rmse': rmse, 'pearson': pearson, 'r2': coef_det, 'score': score}
 
 class kernelWrapper():
+    """Compute pairwise kernels and supported analytical gradients."""
 
     def __init__(self, type = "rbf"):
+        """Select a kernel accepted by :func:`sklearn.metrics.pairwise_kernels`."""
         #[‘additive_chi2’, ‘chi2’, ‘linear’, ‘poly’, ‘polynomial’, ‘rbf’, ‘laplacian’, ‘sigmoid’, ‘cosine’]
         self.type = type
 
     def compute(self,X, feature_index, parameters = {}, Y = []):
+        """Compute a pairwise kernel over selected features.
+
+        Parameters
+        ----------
+        X : numpy.ndarray
+            Left-hand feature matrix.
+        feature_index : array-like of int
+            Columns included in the kernel.
+        parameters : dict, optional
+            Keyword arguments forwarded to the kernel implementation.
+        Y : numpy.ndarray, optional
+            Right-hand matrix. If omitted, compute the kernel of ``X`` with itself.
+        """
         
         if len(Y) == 0:
             if not bool(parameters):
@@ -149,6 +221,10 @@ class kernelWrapper():
         return kernel_matrix
 
     def compute_gradient(self,X, feature_index, wrt, parameters, Y = []):
+        """Compute the kernel derivative with respect to one input feature.
+
+        Gradients are implemented for RBF, linear, and polynomial kernels.
+        """
         if self.type == "rbf":
             K = self.compute(X, 
                              feature_index = feature_index,
@@ -177,6 +253,15 @@ class kernelWrapper():
 
 
 def rank_items(score,descending=False):
+    """Convert numeric scores to zero-based ordinal ranks.
+
+    Parameters
+    ----------
+    score : array-like
+        Values to rank.
+    descending : bool, default=False
+        Rank larger values first when true.
+    """
     if descending:
         sign = -1
     else:
@@ -186,6 +271,7 @@ def rank_items(score,descending=False):
 
 
 def svc_dec2(x, svmSet, model_index, n_to_opt=None, xref=None):
+    """Return a squared SVC decision value for boundary optimization."""
     if n_to_opt is None:
         xstar = x
     else:
@@ -215,6 +301,18 @@ def svc_dec2(x, svmSet, model_index, n_to_opt=None, xref=None):
 
 
 def perDiff(dat):
+    """Calculate condensed mean pairwise relative differences by column.
+
+    Parameters
+    ----------
+    dat : pandas.DataFrame
+        Numeric observations in rows and variables in columns.
+
+    Returns
+    -------
+    numpy.ndarray
+        Condensed distance vector compatible with SciPy clustering functions.
+    """
     n = dat.shape[1]
     
     dist = np.zeros((n,n))

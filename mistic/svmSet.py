@@ -1,3 +1,5 @@
+"""SVM ensemble training, feature selection, prediction, and attribution."""
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt   
@@ -39,10 +41,29 @@ class svmSet():
         Initializes the svmSet with the given parameters.
     """   
     def __init__(self, SVM, cvSet, score_method, 
-                 kernel = kernelWrapper().compute,
+                 kernel = None,
                  separate_feature_sets = False,
                  separate_parameters = False,
                  sparse_kernel_matrix = False):
+        """Initialize an ensemble over precomputed cross-validation splits.
+
+        Parameters
+        ----------
+        SVM : sklearn.svm.SVC or sklearn.svm.SVR
+            Unfitted estimator configured with ``kernel="precomputed"``.
+        cvSet : mistic.cvSet.cvSet
+            Dataset and split indices used by the ensemble.
+        score_method : callable
+            Function accepting this ensemble and a model index.
+        kernel : mistic.utility.kernelWrapper, optional
+            Kernel implementation used to build precomputed matrices.
+        separate_feature_sets : bool, default=False
+            Maintain a different active feature set for each split.
+        separate_parameters : bool, default=False
+            Tune parameters independently for each split.
+        sparse_kernel_matrix : bool, default=False
+            Store training kernels as SciPy sparse matrices.
+        """
         self.SVM = SVM
         self.cv = cvSet
         
@@ -63,7 +84,7 @@ class svmSet():
 
         self.sparse_kernel_matrix = sparse_kernel_matrix
             
-        self.kernel = kernel
+        self.kernel = kernel if kernel is not None else kernelWrapper()
         self._reset_kernel_matrix()
     
         self.score = score_method
@@ -75,13 +96,16 @@ class svmSet():
             self.X_ind.append(self.cv.train[i])
 
     def __getstate__(self):
+        """Return instance state for pickle serialization."""
         return self.__dict__
 
     def __setstate__(self, state):
+        """Restore instance state from a pickle payload."""
         self.__dict__.update(state)
     
     
     def _train_models(self):
+        """Fit every estimator using its current precomputed kernel."""
         for i in range(self.num_models):
             if self.separate_feature_sets | self.separate_parameters:
                 kernel_matrix = self._get_kernel_matrix(self.X_ind[i],self.X_ind[i],model_index = i)
@@ -92,6 +116,7 @@ class svmSet():
 
     
     def _update_kernel_matrix(self):
+        """Recompute kernel matrices for the current features and parameters."""
         if self.separate_feature_sets | self.separate_parameters | self.sparse_kernel_matrix:
             for i in range(self.num_models):     
                 if self.separate_feature_sets:
@@ -137,6 +162,7 @@ class svmSet():
 
     
     def _reset_kernel_matrix(self):
+        """Allocate empty dense or sparse kernel-matrix storage."""
         if self.sparse_kernel_matrix:
             empty_matrix = dok_matrix((self.num_samples, self.num_samples))
         else: 
@@ -151,6 +177,7 @@ class svmSet():
 
     
     def _get_kernel_matrix(self,indices_1, indices_2, model_index = None):
+        """Extract a dense kernel submatrix for two index collections."""
         if isinstance(self.kernel_matrix_,list):
             kernel_matrix = self.kernel_matrix_[model_index][indices_1, :][:, indices_2]
         else:
@@ -165,6 +192,7 @@ class svmSet():
 
     
     def _score_models(self):  
+        """Evaluate fitted models and aggregate split-level metrics."""
         accuracy = []
         for i in range(self.num_models):
             score = self.score(self,model_index = i)
@@ -196,6 +224,14 @@ class svmSet():
 
     
     def tune_models(self, parameter_grid):
+        """Select the highest-scoring model and kernel parameters.
+
+        Parameters
+        ----------
+        parameter_grid : iterable of mistic.utility.paramSet
+            Candidate parameter combinations. With separate tuning enabled,
+            each candidate may also be a list containing one set per model.
+        """
         if self.separate_parameters:
             best_score = self.num_models*[-1e12]
             best_models = self.num_models*[0]
@@ -240,6 +276,7 @@ class svmSet():
 
     
     def _reduce_models(self,parameter_grid):
+        """Restrict training data to support vectors and retune models."""
         for i in range(self.num_models):
             self.X_ind[i] = self.X_ind[i][self.models[i].support_]
             
@@ -247,6 +284,7 @@ class svmSet():
 
 
     def _reset_X_ind(self,parameter_grid):
+        """Restore complete training indices and retune models."""
         for i in range(self.num_models):
             self.X_ind[i] = self.cv.train[i]
 
@@ -254,10 +292,12 @@ class svmSet():
 
     
     def _get_support_vectors(self,model_index):
+        """Return original-space support vectors for one fitted model."""
         return self.cv.X[self.X_ind[model_index],:][self.models[model_index].support_,:]
         
 
     def _update_parameters(self, parameter_set):
+        """Apply estimator parameters and rebuild kernel matrices."""
         self.parameters_ = parameter_set
         
         if isinstance(parameter_set,list):
@@ -274,6 +314,7 @@ class svmSet():
 
     
     def _remove_features(self, to_remove, model_index = None):
+        """Remove active features globally or from a selected model."""
         self._reset_kernel_matrix()
 
         if model_index is not None:
@@ -300,6 +341,19 @@ class svmSet():
                                   reduction_factor = 0.1, 
                                   feature_ranker = combined_rank().compute, 
                                   set_for_rank = "train"):
+        """Perform greedy backward feature elimination.
+
+        Parameters
+        ----------
+        parameter_grid : iterable of mistic.utility.paramSet
+            Candidate estimator and kernel parameters.
+        reduction_factor : float, default=0.1
+            Fraction of active features removed at each iteration.
+        feature_ranker : callable, optional
+            Function returning zero-based ranks for one model.
+        set_for_rank : {"train", "test", "sample"}, default="train"
+            Observations used by the ranker.
+        """
         
         feature_performance = {}
         result = 0
@@ -403,6 +457,7 @@ class svmSet():
 
     
     def feature_importance_(self, model_index):
+        """Estimate feature importance by leave-one-feature-out kernels."""
         support_vectors = self._get_support_vectors(model_index)
         const = -0.5*(np.dot(self.models[model_index].dual_coef_[0,:],self.models[model_index].dual_coef_[0,:].transpose()))
         
@@ -433,6 +488,7 @@ class svmSet():
 
     
     def probability_perturbation_(self, model_index, X):
+        """Estimate feature contributions to calibrated class probabilities."""
         probability = self.models[model_index].predict_proba(X)
         decision = self.models[model_index].decision_function(X)
         
@@ -446,6 +502,7 @@ class svmSet():
 
     
     def decision_perturbation_(self,model_index,X):
+        """Estimate per-feature changes in the SVM decision function."""
         support_vectors = self._get_support_vectors(model_index)
 
         if self.separate_feature_sets:
@@ -478,6 +535,7 @@ class svmSet():
 
             
     def decision_gradient_(self,model_index,X):
+        """Evaluate analytical decision-function gradients for observations."""
         support_vectors = self._get_support_vectors(model_index)
 
         if self.separate_feature_sets:
@@ -507,6 +565,7 @@ class svmSet():
 
     
     def _find_boundary_points(self, model_index, X):
+        """Find nearby zero-decision reference points by optimization."""
         boundary_points = np.zeros([len(X), self.cv.X.shape[1]])
         for i in range(0,len(X)):
             opt = minimize(svc_dec2, X[i,:], args=(self,model_index))
@@ -516,6 +575,20 @@ class svmSet():
 
     
     def integrated_gradient(self, X, model_index = None, num_steps = 20, ref_point = []):
+        """Calculate integrated-gradient feature attributions.
+
+        Parameters
+        ----------
+        X : numpy.ndarray
+            Observations to explain.
+        model_index : int, optional
+            Explain one split model; otherwise average across models.
+        num_steps : int, default=20
+            Integration points between each reference and observation.
+        ref_point : array-like, optional
+            Reference point. Classification defaults to an optimized boundary
+            point; regression requires an explicit reference.
+        """
         if isinstance(self.SVM, SVR) & (len(ref_point) == 0):
             raise NameError('SVRneedsRefPoint')
 
@@ -567,6 +640,7 @@ class svmSet():
 
     
     def plot_performance(self,metric = 'score'):
+        """Plot a feature-selection metric against the feature count."""
         x = [self.feature_performance_[key]['num_features'] for key in self.feature_performance_.keys()]
         y = [self.feature_performance_[key][metric] for key in self.feature_performance_.keys()]
         
@@ -576,6 +650,18 @@ class svmSet():
 
 
     def predict(self, X, model_index = None, use_voting = False):
+        """Predict targets by averaging decisions or voting across models.
+
+        Parameters
+        ----------
+        X : numpy.ndarray
+            Observations to predict.
+        model_index : int, optional
+            Use one split model instead of the ensemble.
+        use_voting : bool, default=False
+            For classification, combine discrete model votes instead of mean
+            decision values.
+        """
         if isinstance(self.SVM, SVR):
             if model_index == None:
                 model_indices = [i for i in range(self.num_models)]
@@ -641,6 +727,7 @@ class svmSet():
         
 
     def decision_function(self, X, model_index = None):     
+        """Return decision values averaged across selected models."""
         if model_index == None:
             model_indices = [i for i in range(self.num_models)]
         else:
@@ -669,6 +756,15 @@ class svmSet():
 
 
     def enrichment_score(self,metric = 'score',type = 'auc'):
+        """Summarize a feature-selection performance trajectory.
+
+        Parameters
+        ----------
+        metric : str, default="score"
+            Metric stored in each feature-selection result.
+        type : {"auc", "max"}, default="auc"
+            Return normalized area under the trajectory or its maximum value.
+        """
         enrichment_score = []
         
         match type:

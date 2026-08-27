@@ -1,8 +1,28 @@
+"""Cross-validation split generation for MISTIC models."""
+
 import numpy as np
 import random
 
 class cvSet():
+    """Store a dataset and generate reusable train/test index sets.
+
+    Parameters
+    ----------
+    X : array-like of shape (n_samples, n_features)
+        Feature matrix.
+    y : array-like of shape (n_samples,)
+        Target values.
+
+    Attributes
+    ----------
+    train, test : list of numpy.ndarray
+        Training and test indices for each generated split.
+    type : {"classification", "regression", None}
+        Split strategy most recently used.
+    """
+
     def __init__(self, X, y):
+        """Initialize the split container from features and targets."""
         self.X = X
         self.y = y
         self.train = []
@@ -10,12 +30,25 @@ class cvSet():
         self.type = None
 
     def __getstate__(self):
+        """Return instance state for pickle serialization."""
         return self.__dict__
 
     def __setstate__(self, state):
+        """Restore instance state from a pickle payload."""
         self.__dict__.update(state)
 
     def classification(self, num_sets = 5, validation_size = 0.2, random_seed = 0):
+        """Generate stratified random splits for binary classification.
+
+        Parameters
+        ----------
+        num_sets : int, default=5
+            Number of train/test splits to generate.
+        validation_size : float, default=0.2
+            Fraction of each class assigned to the test set.
+        random_seed : int, default=0
+            Seed used by the split generator.
+        """
         self.type = "classification"
         random.seed(random_seed)
         
@@ -44,6 +77,13 @@ class cvSet():
             self.test.append(np.array(val_set))
 
     def k_fold(self, num_folds = 5):
+        """Generate shuffled folds for regression.
+
+        Parameters
+        ----------
+        num_folds : int, default=5
+            Number of folds. Each fold is used once as the test set.
+        """
         self.type = "k-fold"
         
         all_ind = list(range(len(self.y)))
@@ -57,6 +97,17 @@ class cvSet():
             self.test.append(np.array(test_ind))
 
     def independent(self, num_sets = 5, validation_size = 0.2, random_seed = 0):
+        """Generate independent random holdout splits for regression.
+
+        Parameters
+        ----------
+        num_sets : int, default=5
+            Number of train/test splits to generate.
+        validation_size : float, default=0.2
+            Fraction of samples assigned to each test set.
+        random_seed : int, default=0
+            Seed used by the split generator.
+        """
         self.type = "independent"
         random.seed(random_seed)
         
