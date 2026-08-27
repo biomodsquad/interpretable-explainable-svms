@@ -3,12 +3,18 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to MISTIC's documentation!
-==================================
+MISTIC documentation
+====================
+
+MISTIC provides feature selection and attribution for ensembles of support
+vector machines trained over reusable cross-validation splits.
 
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
+
+   usage
+   api
 
 Indices and tables
 ==================
