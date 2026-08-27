@@ -26,7 +26,7 @@ class combined_rank():
                                                    scale = np.std(svmSet.cv.X[:,i]), 
                                                    size = self.number_samples)            
         else:
-            X_for_rank = svmSet.cv.X[getattr(svmSet.cv.sets[model_index], set_for_rank)]
+            X_for_rank = svmSet.cv.X[getattr(svmSet.cv, set_for_rank)[model_index]]
 
         feature_contribution = svmSet.decision_perturbation_(model_index, X_for_rank)
         cummulative_contribution = np.sum((feature_contribution)**2,axis=0)

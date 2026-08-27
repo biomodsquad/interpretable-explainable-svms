@@ -9,6 +9,12 @@ class cvSet():
         self.test = []
         self.type = None
 
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
     def classification(self, num_sets = 5, validation_size = 0.2, random_seed = 0):
         self.type = "classification"
         random.seed(random_seed)
@@ -101,4 +107,3 @@ class cvSet():
         self.train.append(np.array(train_set))
         self.test.append(np.array(val_set))
         
- 

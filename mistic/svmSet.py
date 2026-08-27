@@ -73,6 +73,12 @@ class svmSet():
         for i in range(self.num_models):
             self.models.append(copy.deepcopy(self.SVM))
             self.X_ind.append(self.cv.train[i])
+
+    def __getstate__(self):
+        return self.__dict__
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
     
     
     def _train_models(self):
