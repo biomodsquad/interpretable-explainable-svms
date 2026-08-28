@@ -69,6 +69,54 @@ def test_greedy_forward_selection_evaluates_singletons_and_orders_features():
     assert len(ensemble.features) == expected_size
 
 
+def test_greedy_forward_selection_caps_search_and_ties_unselected_features():
+    ensemble = _fitted_ensemble()
+    parameter_grid = [paramSet({"C": 1.0}, {})]
+
+    ensemble.greedy_forward_selection(
+        parameter_grid, reduction_factor=0.5, max_features=3)
+
+    feature_counts = [
+        row["num_features"] for row in ensemble.feature_performance_.values()]
+    assert feature_counts[-1] == ensemble.cv.X.shape[1]
+    assert max(feature_counts[:-1]) <= 3
+    assert len(ensemble.features) <= 3
+    last_rank = np.max(ensemble.feature_rank)
+    assert np.count_nonzero(ensemble.feature_rank == last_rank) == 3
+
+
+def test_greedy_forward_selection_validates_max_features():
+    ensemble = _fitted_ensemble()
+    parameter_grid = [paramSet({"C": 1.0}, {})]
+
+    for invalid_count in (0, ensemble.cv.X.shape[1] + 1):
+        with np.testing.assert_raises(ValueError):
+            ensemble.greedy_forward_selection(
+                parameter_grid, max_features=invalid_count)
+    with np.testing.assert_raises(TypeError):
+        ensemble.greedy_forward_selection(parameter_grid, max_features=2.5)
+
+
+def test_greedy_forward_selection_stops_when_no_group_fits_cap():
+    fitted = _fitted_ensemble()
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        fitted.cv,
+        score_svc().score,
+        kernel=kernelWrapper("linear"),
+        perturbation_sets=[[0, 1], [2, 3], [4, 5]],
+    )
+
+    ensemble.greedy_forward_selection(
+        [paramSet({"C": 1.0}, {})], max_features=3)
+
+    assert len(ensemble.features) == 2
+    assert [row["num_features"]
+            for row in ensemble.feature_performance_.values()] == [2, 6]
+    assert np.count_nonzero(
+        ensemble.feature_rank == np.max(ensemble.feature_rank)) == 4
+
+
 def test_set_num_features_uses_ranking_and_retunes():
     ensemble = _fitted_ensemble()
     parameter_grid = [

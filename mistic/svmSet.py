@@ -556,18 +556,39 @@ class svmSet():
                                  reduction_factor=0.1,
                                  feature_ranker=combined_rank().compute,
                                  set_for_rank="train",
-                                 tune_models_each_step=True):
+                                 tune_models_each_step=True,
+                                 max_features=None):
         """Rank and add feature sets using greedy forward selection.
 
         Every perturbation set is fitted by itself in the first round and the
         best singleton is retained.  Later rounds use the same perturbation
         ranker as backward selection, but perturb inactive sets by adding them;
         consequently forward decision perturbations have the opposite sign.
+        When ``max_features`` is supplied, the greedy search stops at that
+        many active feature columns. Unselected features tie for the final
+        rank, and a full-feature model is still evaluated for comparison but
+        is not eligible to replace the best capped model.
         """
         candidates = [np.asarray(group, dtype=int)
                       for group in self.perturbation_sets]
         if not candidates:
             raise ValueError("forward selection requires at least one feature set")
+
+        total_features = self.cv.X.shape[1]
+        if max_features is None:
+            max_features = total_features
+        elif not isinstance(max_features, (int, np.integer)):
+            raise TypeError("max_features must be an integer or None")
+        elif max_features < 1 or max_features > total_features:
+            raise ValueError(
+                f"max_features must be between 1 and {total_features}")
+
+        eligible_candidates = [
+            candidate for candidate in candidates
+            if len(candidate) <= max_features]
+        if not eligible_candidates:
+            raise ValueError(
+                "max_features is smaller than every perturbation set")
 
         feature_performance = {}
         singleton_performance = {}
@@ -598,7 +619,7 @@ class svmSet():
         try:
             # The first round is deliberately exhaustive rather than based on
             # a perturbation of an unfitted, zero-feature model.
-            for candidate_index, candidate in enumerate(candidates):
+            for candidate_index, candidate in enumerate(eligible_candidates):
                 if self.separate_feature_sets:
                     for model_index in range(self.num_models):
                         self._set_features(candidate, model_index,
@@ -621,6 +642,22 @@ class svmSet():
                 len(features) for features in self.features
             ]) if self.separate_feature_sets else len(self.features)
 
+            def fit_current_feature_set():
+                if tune_models_each_step:
+                    self.tune_models(parameter_grid)
+                    return
+
+                scaled = copy.deepcopy(baseline_parameters)
+                current_count = (np.mean([len(features) for features in self.features])
+                                 if self.separate_feature_sets else len(self.features))
+                parameter_sets = scaled if isinstance(scaled, list) else [scaled]
+                for parameters in parameter_sets:
+                    if "gamma" in parameters.kernel:
+                        parameters.kernel["gamma"] *= initial_count/current_count
+                self._update_parameters(scaled)
+                self._train_models()
+                self._score_models()
+
             result = 0
             while True:
                 row = mean_row()
@@ -638,21 +675,37 @@ class svmSet():
 
                 inactive = self._inactive_perturbation_sets(
                     0 if self.separate_feature_sets else None)
-                if not inactive:
+                current_count = (np.mean([len(features) for features in self.features])
+                                 if self.separate_feature_sets else len(self.features))
+                if not inactive or current_count >= max_features:
                     break
 
                 if self.separate_feature_sets:
+                    added_any = False
                     for model_index in range(self.num_models):
                         model_inactive = self._inactive_perturbation_sets(model_index)
                         ranks = feature_ranker(self, model_index, set_for_rank)
                         n_to_add = max(1, min(len(model_inactive),
                             int(np.floor(len(model_inactive) * reduction_factor))))
-                        chosen = np.argsort(ranks)[-n_to_add:]
+                        ranked = np.argsort(ranks)[::-1]
+                        chosen = []
+                        feature_count = len(self.features[model_index])
+                        for index in ranked:
+                            if len(chosen) >= n_to_add:
+                                break
+                            if feature_count + len(model_inactive[index]) <= max_features:
+                                chosen.append(index)
+                                feature_count += len(model_inactive[index])
+                        if not chosen:
+                            continue
                         additions = np.concatenate([
                             model_inactive[index] for index in chosen])
                         selection_order[model_index].extend(additions.tolist())
                         self._add_features(additions,
                             model_index, update_kernel=False)
+                        added_any = True
+                    if not added_any:
+                        break
                 else:
                     rank_total = np.zeros(len(inactive))
                     for model_index in range(self.num_models):
@@ -660,25 +713,44 @@ class svmSet():
                     consensus = rank_items(rank_total)
                     n_to_add = max(1, min(len(inactive),
                         int(np.floor(len(inactive) * reduction_factor))))
-                    chosen = np.argsort(consensus)[-n_to_add:]
+                    ranked = np.argsort(consensus)[::-1]
+                    chosen = []
+                    feature_count = len(self.features)
+                    for index in ranked:
+                        if len(chosen) >= n_to_add:
+                            break
+                        if feature_count + len(inactive[index]) <= max_features:
+                            chosen.append(index)
+                            feature_count += len(inactive[index])
+                    if not chosen:
+                        break
                     additions = np.concatenate([
                         inactive[index] for index in chosen])
                     selection_order.extend(additions.tolist())
                     self._add_features(additions, update_kernel=False)
 
-                if tune_models_each_step:
-                    self.tune_models(parameter_grid)
+                fit_current_feature_set()
+
+            # Preserve a full-feature performance endpoint even when the
+            # greedy search is capped. It is intentionally not passed to
+            # save_state, so it cannot replace the best capped model.
+            if max_features < total_features:
+                if self.separate_feature_sets:
+                    for model_index in range(self.num_models):
+                        self._set_features(np.arange(total_features), model_index,
+                                           update_kernel=False)
                 else:
-                    scaled = copy.deepcopy(baseline_parameters)
-                    current_count = (np.mean([len(features) for features in self.features])
-                                     if self.separate_feature_sets else len(self.features))
-                    parameter_sets = scaled if isinstance(scaled, list) else [scaled]
-                    for parameters in parameter_sets:
-                        if "gamma" in parameters.kernel:
-                            parameters.kernel["gamma"] *= initial_count/current_count
-                    self._update_parameters(scaled)
-                    self._train_models()
-                    self._score_models()
+                    self._set_features(np.arange(total_features),
+                                       update_kernel=False)
+                fit_current_feature_set()
+                row = mean_row()
+                row["num_features"] = total_features
+                row["mean_nSV"] = np.sum([
+                    np.sum(model.n_support_) for model in self.models
+                ]) / self.num_models
+                print(f"Number of Features: {row['num_features']:.0f}, "
+                      f"Score: {row['score']:.3f}")
+                feature_performance[result] = copy.deepcopy(row)
 
             self.singleton_performance_ = singleton_performance
             self.feature_performance_ = feature_performance
@@ -687,12 +759,26 @@ class svmSet():
             self._kernel_configuration_ = self._kernel_configuration(
                 self.parameters_)
             if self.separate_feature_sets:
-                self.sorted_features = [np.asarray(features)
-                                        for features in selection_order]
-                self.feature_rank = [features.argsort() for features in self.sorted_features]
+                self.sorted_features = []
+                self.feature_rank = []
+                for model_index, selected in enumerate(selection_order):
+                    unselected = [feature for feature in range(total_features)
+                                  if feature not in selected]
+                    ordered = np.asarray(selected + unselected)
+                    ranks = np.empty(total_features, dtype=int)
+                    for rank, feature in enumerate(selected):
+                        ranks[feature] = rank
+                    ranks[unselected] = len(selected)
+                    self.sorted_features.append(ordered)
+                    self.feature_rank.append(ranks)
             else:
-                self.sorted_features = np.asarray(selection_order)
-                self.feature_rank = self.sorted_features.argsort()
+                unselected = [feature for feature in range(total_features)
+                              if feature not in selection_order]
+                self.sorted_features = np.asarray(selection_order + unselected)
+                self.feature_rank = np.empty(total_features, dtype=int)
+                for rank, feature in enumerate(selection_order):
+                    self.feature_rank[feature] = rank
+                self.feature_rank[unselected] = len(selection_order)
         finally:
             if previous_direction is None:
                 self.__dict__.pop("_selection_direction_", None)
