@@ -1,11 +1,8 @@
-"""SVM ensemble training, feature selection, prediction, and attribution."""
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt   
 
 from scipy.optimize import minimize
-from scipy.sparse import dok_matrix
 
 import copy
 from collections import Counter
@@ -17,53 +14,12 @@ import random
 from mistic.utility import combined_rank, kernelWrapper, score_svr, score_svc, dotdict, svc_dec2, rank_items
 
 class svmSet():
-    """
-    A class used to represent a set of Support Vector Machines (SVMs) for feature selection.
-
-    Attributes
-    ----------
-    SVM : object
-        An instance of an SVM model.
-    cv : object
-        Cross-validation set.
-    score : function
-        Method to score the SVM.
-    kernel : function, optional
-        Kernel function to be used by the SVM (default is kernelWrapper().compute).
-    separate_feature_sets : bool, optional
-        Flag to indicate if separate feature sets should be used (default is False).
-    separate_parameters : bool, optional
-        Flag to indicate if separate parameters should be used (default is False).
-
-    Methods
-    -------
-    __init__(self, SVM, cvSet, score_method, kernel=kernelWrapper().compute, separate_feature_sets=False, separate_parameters=False)
-        Initializes the svmSet with the given parameters.
-    """   
+        
     def __init__(self, SVM, cvSet, score_method, 
                  kernel = None,
                  separate_feature_sets = False,
                  separate_parameters = False,
-                 sparse_kernel_matrix = False):
-        """Initialize an ensemble over precomputed cross-validation splits.
-
-        Parameters
-        ----------
-        SVM : sklearn.svm.SVC or sklearn.svm.SVR
-            Unfitted estimator configured with ``kernel="precomputed"``.
-        cvSet : mistic.cvSet.cvSet
-            Dataset and split indices used by the ensemble.
-        score_method : callable
-            Function accepting this ensemble and a model index.
-        kernel : mistic.utility.kernelWrapper, optional
-            Kernel implementation used to build precomputed matrices.
-        separate_feature_sets : bool, default=False
-            Maintain a different active feature set for each split.
-        separate_parameters : bool, default=False
-            Tune parameters independently for each split.
-        sparse_kernel_matrix : bool, default=False
-            Store training kernels as SciPy sparse matrices.
-        """
+                 perturbation_sets = None):
         self.SVM = SVM
         self.cv = cvSet
         
@@ -82,10 +38,16 @@ class svmSet():
             self.features = np.array([f for f in range(self.cv.X.shape[1])])
             self.removed_features_ = []
 
-        self.sparse_kernel_matrix = sparse_kernel_matrix
-            
-        self.kernel = kernel if kernel is not None else kernelWrapper()
+        all_features = np.arange(self.cv.X.shape[1])
+        if perturbation_sets is None:
+            self.perturbation_sets = [[int(feature)] for feature in all_features]
+        else:
+            self.perturbation_sets = self._normalize_perturbation_sets(
+                perturbation_sets, all_features)
+
+        self.kernel = kernelWrapper() if kernel is None else kernel
         self._reset_kernel_matrix()
+        self._kernel_configuration_ = None
     
         self.score = score_method
 
@@ -94,18 +56,21 @@ class svmSet():
         for i in range(self.num_models):
             self.models.append(copy.deepcopy(self.SVM))
             self.X_ind.append(self.cv.train[i])
-
+    
+    
     def __getstate__(self):
-        """Return instance state for pickle serialization."""
-        return self.__dict__
+            return self.__dict__
 
     def __setstate__(self, state):
-        """Restore instance state from a pickle payload."""
-        self.__dict__.update(state)
-    
+            self.__dict__.update(state)
+            # Older serialized objects predate kernel-configuration tracking.
+            if "_kernel_configuration_" not in self.__dict__:
+                self._kernel_configuration_ = None
+            if "perturbation_sets" not in self.__dict__:
+                self.perturbation_sets = [
+                    [feature] for feature in range(self.cv.X.shape[1])]
     
     def _train_models(self):
-        """Fit every estimator using its current precomputed kernel."""
         for i in range(self.num_models):
             if self.separate_feature_sets | self.separate_parameters:
                 kernel_matrix = self._get_kernel_matrix(self.X_ind[i],self.X_ind[i],model_index = i)
@@ -116,8 +81,7 @@ class svmSet():
 
     
     def _update_kernel_matrix(self):
-        """Recompute kernel matrices for the current features and parameters."""
-        if self.separate_feature_sets | self.separate_parameters | self.sparse_kernel_matrix:
+        if self.separate_feature_sets | self.separate_parameters:
             for i in range(self.num_models):     
                 if self.separate_feature_sets:
                     features = self.features[i]
@@ -129,32 +93,13 @@ class svmSet():
                 else:
                     parameters = self.parameters_.kernel
                     
-                if self.sparse_kernel_matrix:
-                    training_kernel = self.kernel.compute(self.cv.X[self.cv.train[i], :], 
-                                                          feature_index = features, 
-                                                          parameters = parameters)
-                
-                    for j in range(len(self.cv.train[i])):
-                        if self.separate_feature_sets | self.separate_parameters:
-                            self.kernel_matrix_[i][self.cv.train[i][j],self.cv.train[i]] = training_kernel[j,:]
-                        else:
-                            self.kernel_matrix_[self.cv.train[i][j],self.cv.train[i]] = training_kernel[j,:]
-
-                    testing_kernel = self.kernel.compute(self.cv.X[self.cv.test[i], :], 
-                                                         feature_index = features, 
-                                                         parameters = parameters,
-                                                         Y = self.cv.X[self.cv.train[i], :])
-                
-                    for j in range(len(self.cv.test[i])):
-                        if self.separate_feature_sets | self.separate_parameters:
-                            self.kernel_matrix_[i][self.cv.test[i][j],self.cv.train[i]] = testing_kernel[j,:]
-                        else:
-                            self.kernel_matrix_[self.cv.test[i][j],self.cv.train[i]] = testing_kernel[j,:]
-                        
-                else:
-                    self.kernel_matrix_[i] = self.kernel.compute(self.cv.X, 
-                                                             feature_index = features, 
-                                                             parameters = parameters)
+                # A fold only ever needs columns belonging to its training
+                # set. Avoid retaining a full square matrix for every model.
+                self.kernel_matrix_[i] = self.kernel.compute(
+                    self.cv.X,
+                    feature_index = features,
+                    parameters = parameters,
+                    Y = self.cv.X[self.cv.train[i], :])
         else:
             self.kernel_matrix_ = self.kernel.compute(self.cv.X, 
                                                       feature_index = self.features, 
@@ -162,37 +107,33 @@ class svmSet():
 
     
     def _reset_kernel_matrix(self):
-        """Allocate empty dense or sparse kernel-matrix storage."""
-        if self.sparse_kernel_matrix:
-            empty_matrix = dok_matrix((self.num_samples, self.num_samples))
-        else: 
-            empty_matrix = np.zeros((self.num_samples, self.num_samples))
-            
         if self.separate_feature_sets | self.separate_parameters:
-            self.kernel_matrix_ = []      
+            self.kernel_matrix_ = []
             for i in range(self.num_models):
-                self.kernel_matrix_.append(copy.deepcopy(empty_matrix))
+                self.kernel_matrix_.append(
+                    np.zeros((self.num_samples, len(self.cv.train[i]))))
         else:
-            self.kernel_matrix_ = empty_matrix
+            self.kernel_matrix_ = np.zeros((self.num_samples, self.num_samples))
 
     
     def _get_kernel_matrix(self,indices_1, indices_2, model_index = None):
-        """Extract a dense kernel submatrix for two index collections."""
         if isinstance(self.kernel_matrix_,list):
-            kernel_matrix = self.kernel_matrix_[model_index][indices_1, :][:, indices_2]
+            # Per-model matrices contain training columns only. Translate
+            # sample indices to their compact column positions.
+            train_indices = self.cv.train[model_index]
+            positions = {sample: position for position, sample in enumerate(train_indices)}
+            column_indices = np.fromiter(
+                (positions[sample] for sample in indices_2),
+                dtype=int,
+                count=len(indices_2))
+            kernel_matrix = self.kernel_matrix_[model_index][np.ix_(indices_1, column_indices)]
         else:
             kernel_matrix = self.kernel_matrix_[indices_1, :][:, indices_2]
 
-        if self.sparse_kernel_matrix:
-            returned_matrix = np.asarray(kernel_matrix.todense())
-        else:
-            returned_matrix = kernel_matrix
-
-        return returned_matrix
+        return kernel_matrix
 
     
     def _score_models(self):  
-        """Evaluate fitted models and aggregate split-level metrics."""
         accuracy = []
         for i in range(self.num_models):
             score = self.score(self,model_index = i)
@@ -224,14 +165,6 @@ class svmSet():
 
     
     def tune_models(self, parameter_grid):
-        """Select the highest-scoring model and kernel parameters.
-
-        Parameters
-        ----------
-        parameter_grid : iterable of mistic.utility.paramSet
-            Candidate parameter combinations. With separate tuning enabled,
-            each candidate may also be a list containing one set per model.
-        """
         if self.separate_parameters:
             best_score = self.num_models*[-1e12]
             best_models = self.num_models*[0]
@@ -254,9 +187,14 @@ class svmSet():
                 for i in range(self.num_models):
                     if self.performance_[i].score > best_score[i]:
                         best_models[i] = copy.deepcopy(self.models[i])
-                        best_kernel_matrix[i] = copy.deepcopy(self.kernel_matrix_)
-                        best_parameters[i] = parameter_set
-                        best_performance[i] = self.performance_[i]
+                        best_kernel_matrix[i] = copy.deepcopy(self.kernel_matrix_[i])
+                        if isinstance(parameter_set, list):
+                            best_parameters[i] = copy.deepcopy(parameter_set[i])
+                        else:
+                            # A single candidate is broadcast to every fold;
+                            # each fold can still select it independently.
+                            best_parameters[i] = copy.deepcopy(parameter_set)
+                        best_performance[i] = copy.deepcopy(self.performance_[i])
                         best_score[i] = self.performance_[i].score
             else:
                 if self.performance_.score > best_score:
@@ -271,12 +209,14 @@ class svmSet():
         self.models = best_models
         self.performance_ = best_performance
         
-        self._update_parameters(best_parameters)
+        # The winning matrix was retained above, so only restore model and
+        # parameter attributes here; rebuilding its kernel would be wasted.
+        self._update_parameters(best_parameters, update_kernel = False)
         self.kernel_matrix_ = best_kernel_matrix
+        self._kernel_configuration_ = self._kernel_configuration(best_parameters)
 
     
     def _reduce_models(self,parameter_grid):
-        """Restrict training data to support vectors and retune models."""
         for i in range(self.num_models):
             self.X_ind[i] = self.X_ind[i][self.models[i].support_]
             
@@ -284,7 +224,6 @@ class svmSet():
 
 
     def _reset_X_ind(self,parameter_grid):
-        """Restore complete training indices and retune models."""
         for i in range(self.num_models):
             self.X_ind[i] = self.cv.train[i]
 
@@ -292,12 +231,38 @@ class svmSet():
 
     
     def _get_support_vectors(self,model_index):
-        """Return original-space support vectors for one fitted model."""
         return self.cv.X[self.X_ind[model_index],:][self.models[model_index].support_,:]
         
 
-    def _update_parameters(self, parameter_set):
-        """Apply estimator parameters and rebuild kernel matrices."""
+    @staticmethod
+    def _freeze_parameter(value):
+        """Convert nested parameter values into a comparable signature."""
+        if isinstance(value, dict):
+            return tuple(sorted(
+                (key, svmSet._freeze_parameter(item))
+                for key, item in value.items()))
+        if isinstance(value, np.ndarray):
+            return (value.dtype.str, value.shape, value.tobytes())
+        if isinstance(value, (list, tuple)):
+            return tuple(svmSet._freeze_parameter(item) for item in value)
+        try:
+            hash(value)
+            return value
+        except TypeError:
+            return repr(value)
+
+    def _kernel_configuration(self, parameter_set):
+        if isinstance(parameter_set, list):
+            kernel_parameters = [parameters.kernel for parameters in parameter_set]
+        else:
+            kernel_parameters = parameter_set.kernel
+
+        return (
+            self._freeze_parameter(kernel_parameters),
+            self._freeze_parameter(self.features))
+
+
+    def _update_parameters(self, parameter_set, update_kernel = True):
         self.parameters_ = parameter_set
         
         if isinstance(parameter_set,list):
@@ -309,62 +274,138 @@ class svmSet():
                 for model_param in parameter_set.model.keys():
                         setattr(self.models[i],model_param, parameter_set.model[model_param])
 
-        self._reset_kernel_matrix()
-        self._update_kernel_matrix()
+        kernel_configuration = self._kernel_configuration(parameter_set)
+        if update_kernel and kernel_configuration != self._kernel_configuration_:
+            self._reset_kernel_matrix()
+            self._update_kernel_matrix()
+            self._kernel_configuration_ = kernel_configuration
 
     
-    def _remove_features(self, to_remove, model_index = None):
-        """Remove active features globally or from a selected model."""
+    def _remove_features(self, to_remove, model_index = None,
+                         update_kernel = True):
         self._reset_kernel_matrix()
+        self._kernel_configuration_ = None
 
         if model_index is not None:
             current_features = self.features[model_index]
         else:
             current_features = self.features
-                
-        for f in to_remove:
-            ind_to_remove =  np.where(current_features == f)
-            current_features = np.delete(current_features, ind_to_remove)
+
+        # Features are selection units only through their perturbation set.
+        # Selecting any member removes every active member of that set.
+        requested = set(np.asarray(to_remove).ravel().tolist())
+        expanded_removal = []
+        for perturbation_set in self.perturbation_sets:
+            if requested.intersection(perturbation_set):
+                expanded_removal.extend(perturbation_set)
+        expanded_removal = np.asarray([
+            feature for feature in expanded_removal if feature in current_features])
+        current_features = current_features[
+            ~np.isin(current_features, expanded_removal)]
         
         if model_index is not None:
             self.features[model_index] = current_features
-            self.removed_features_[model_index] = np.append(self.removed_features_[model_index], to_remove)
+            self.removed_features_[model_index] = np.append(
+                self.removed_features_[model_index], expanded_removal)
         else:
             self.features = current_features
-            self.removed_features_ = np.append(self.removed_features_,to_remove)
+            self.removed_features_ = np.append(
+                self.removed_features_, expanded_removal)
             
-        if len(current_features) > 0:
+        if len(current_features) > 0 and update_kernel:
             self._update_kernel_matrix()
+            self._kernel_configuration_ = self._kernel_configuration(self.parameters_)
+
+
+    def _set_features(self, features, model_index=None, update_kernel=True):
+        """Replace the active feature set while preserving its original order."""
+        requested = set(np.asarray(features).ravel().tolist())
+        ordered = np.asarray([
+            feature for group in self.perturbation_sets for feature in group
+            if feature in requested], dtype=int)
+
+        self._reset_kernel_matrix()
+        self._kernel_configuration_ = None
+        if model_index is None:
+            self.features = ordered
+        else:
+            self.features[model_index] = ordered
+
+        if len(ordered) > 0 and update_kernel:
+            self._update_kernel_matrix()
+            self._kernel_configuration_ = self._kernel_configuration(self.parameters_)
+
+
+    def _add_features(self, to_add, model_index=None, update_kernel=True):
+        """Add complete perturbation sets to the active feature set."""
+        current = (self.features if model_index is None
+                   else self.features[model_index])
+        requested = set(np.asarray(to_add).ravel().tolist())
+        expanded = list(current)
+        for perturbation_set in self.perturbation_sets:
+            if requested.intersection(perturbation_set):
+                expanded.extend(perturbation_set)
+        self._set_features(expanded, model_index, update_kernel)
             
     
     def greedy_backward_selection(self, parameter_grid, 
                                   reduction_factor = 0.1, 
                                   feature_ranker = combined_rank().compute, 
-                                  set_for_rank = "train"):
-        """Perform greedy backward feature elimination.
+                                  set_for_rank = "train",
+                                  tune_models_each_step = True):
+        """Rank and remove feature sets using greedy backward selection.
 
-        Parameters
-        ----------
-        parameter_grid : iterable of mistic.utility.paramSet
-            Candidate estimator and kernel parameters.
-        reduction_factor : float, default=0.1
-            Fraction of active features removed at each iteration.
-        feature_ranker : callable, optional
-            Function returning zero-based ranks for one model.
-        set_for_rank : {"train", "test", "sample"}, default="train"
-            Observations used by the ranker.
+        When ``tune_models_each_step`` is false, tuning is performed only for
+        the initial full-feature model. Its selected parameters are retained,
+        while gamma, when present, is scaled at each later step as
+        ``initial_gamma * initial_feature_count / current_feature_count``.
+        Kernels without a gamma parameter retain their tuned parameters.
         """
         
         feature_performance = {}
         result = 0
         best_score = -1e12
+        initial_feature_counts = np.asarray([
+            len(self.features[index]) if self.separate_feature_sets
+            else len(self.features)
+            for index in range(self.num_models)])
+        baseline_parameters = None
+
+        def fit_current_feature_set():
+            nonlocal baseline_parameters
+            if tune_models_each_step or baseline_parameters is None:
+                self.tune_models(parameter_grid)
+                if baseline_parameters is None:
+                    baseline_parameters = copy.deepcopy(self.parameters_)
+                return
+
+            scaled_parameters = copy.deepcopy(baseline_parameters)
+            current_feature_counts = np.asarray([
+                len(self.features[index]) if self.separate_feature_sets
+                else len(self.features)
+                for index in range(self.num_models)])
+
+            if isinstance(scaled_parameters, list):
+                for index, parameters in enumerate(scaled_parameters):
+                    if "gamma" in parameters.kernel:
+                        parameters.kernel["gamma"] *= (
+                            initial_feature_counts[index]/current_feature_counts[index])
+            else:
+                if "gamma" in scaled_parameters.kernel:
+                    scaled_parameters.kernel["gamma"] *= (
+                        np.mean(initial_feature_counts)/np.mean(current_feature_counts))
+
+            self._update_parameters(scaled_parameters)
+            self._train_models()
+            self._score_models()
+
         if self.separate_feature_sets:
-            n_feats = len(self.features[0])
+            n_sets = len(self._active_perturbation_sets(0))
         else:
-            n_feats = len(self.features)
+            n_sets = len(self._active_perturbation_sets())
             
-        while(n_feats >= 2) :
-            self.tune_models(parameter_grid)
+        while(n_sets >= 2) :
+            fit_current_feature_set()
 
             if self.separate_parameters:
                 mean_performance = self.performance_[0]
@@ -396,26 +437,35 @@ class svmSet():
             if self.separate_feature_sets:
                 for i in range(self.num_models):
                     feature_rank = feature_ranker(self,i,set_for_rank)
-                    n_to_remove = np.floor(len(self.features[i])*reduction_factor).astype(int)
-            
-                    to_remove = self.features[i][feature_rank <= n_to_remove]
-                    self._remove_features(to_remove, model_index = i)
+                    active_sets = self._active_perturbation_sets(i)
+                    n_to_remove = max(
+                        1, min(len(active_sets) - 1,
+                               int(np.floor(len(active_sets)*reduction_factor))))
+                    selected_sets = np.argsort(feature_rank)[:n_to_remove]
+                    to_remove = np.concatenate([
+                        active_sets[index] for index in selected_sets])
+                    self._remove_features(
+                        to_remove, model_index = i, update_kernel = False)
 
-                n_feats = len(self.features[0])
+                n_sets = len(self._active_perturbation_sets(0))
             else:
-                rank_total = np.zeros(len(self.features))
+                active_sets = self._active_perturbation_sets()
+                rank_total = np.zeros(len(active_sets))
                 for i in range(self.num_models):
                     rank_total = rank_total + feature_ranker(self,i,set_for_rank)
                 
                 consensus_rank = rank_items(rank_total)
-                n_to_remove = np.floor(len(self.features)*reduction_factor).astype(int)
+                n_to_remove = max(
+                    1, min(len(active_sets) - 1,
+                           int(np.floor(len(active_sets)*reduction_factor))))
+                selected_sets = np.argsort(consensus_rank)[:n_to_remove]
+                to_remove = np.concatenate([
+                    active_sets[index] for index in selected_sets])
+                self._remove_features(to_remove, update_kernel = False)
+                n_sets = len(self._active_perturbation_sets())
         
-                to_remove = self.features[consensus_rank <= n_to_remove]
-                self._remove_features(to_remove)
-                n_feats = len(self.features)
-        
-        if n_feats > 0:
-            self.tune_models(parameter_grid)
+        if n_sets > 0:
+            fit_current_feature_set()
             
             if self.separate_parameters:
                 mean_performance = self.performance_[0]
@@ -455,9 +505,230 @@ class svmSet():
         self.features = best_features
         self.kernel_matrix_ = best_kernel_matrix
 
+
+    def greedy_forward_selection(self, parameter_grid,
+                                 reduction_factor=0.1,
+                                 feature_ranker=combined_rank().compute,
+                                 set_for_rank="train",
+                                 tune_models_each_step=True):
+        """Rank and add feature sets using greedy forward selection.
+
+        Every perturbation set is fitted by itself in the first round and the
+        best singleton is retained.  Later rounds use the same perturbation
+        ranker as backward selection, but perturb inactive sets by adding them;
+        consequently forward decision perturbations have the opposite sign.
+        """
+        candidates = [np.asarray(group, dtype=int)
+                      for group in self.perturbation_sets]
+        if not candidates:
+            raise ValueError("forward selection requires at least one feature set")
+
+        feature_performance = {}
+        singleton_performance = {}
+        best_score = -1e12
+        best_state = None
+        previous_direction = getattr(self, "_selection_direction_", None)
+        self._selection_direction_ = "forward"
+
+        def mean_row():
+            if self.separate_parameters:
+                totals = copy.deepcopy(self.performance_[0])
+                for model_index in range(1, self.num_models):
+                    totals = {key: totals[key] + self.performance_[model_index][key]
+                              for key in totals}
+                return dotdict({key: totals[key] / self.num_models for key in totals})
+            return copy.deepcopy(self.performance_)
+
+        def save_state(row):
+            nonlocal best_score, best_state
+            if row.score >= best_score:
+                best_score = row.score
+                best_state = (copy.deepcopy(self.models),
+                              copy.deepcopy(self.kernel_matrix_),
+                              copy.deepcopy(self.parameters_),
+                              copy.deepcopy(self.performance_),
+                              copy.deepcopy(self.features))
+
+        try:
+            # The first round is deliberately exhaustive rather than based on
+            # a perturbation of an unfitted, zero-feature model.
+            for candidate_index, candidate in enumerate(candidates):
+                if self.separate_feature_sets:
+                    for model_index in range(self.num_models):
+                        self._set_features(candidate, model_index,
+                                           update_kernel=False)
+                else:
+                    self._set_features(candidate, update_kernel=False)
+                self.tune_models(parameter_grid)
+                row = mean_row()
+                singleton_performance[candidate_index] = copy.deepcopy(row)
+                if row.score >= best_score:
+                    save_state(row)
+
+            self.models, self.kernel_matrix_, self.parameters_, \
+                self.performance_, self.features = copy.deepcopy(best_state)
+            if self.separate_feature_sets:
+                selection_order = [list(features) for features in self.features]
+            else:
+                selection_order = list(self.features)
+            baseline_parameters = copy.deepcopy(self.parameters_)
+            initial_count = np.mean([
+                len(features) for features in self.features
+            ]) if self.separate_feature_sets else len(self.features)
+
+            result = 0
+            while True:
+                row = mean_row()
+                row["num_features"] = (np.mean([len(features) for features in self.features])
+                                       if self.separate_feature_sets
+                                       else len(self.features))
+                row["mean_nSV"] = np.sum([
+                    np.sum(model.n_support_) for model in self.models
+                ]) / self.num_models
+                print(f"Number of Features: {row['num_features']:.0f}, "
+                      f"Score: {row['score']:.3f}")
+                feature_performance[result] = copy.deepcopy(row)
+                result += 1
+                save_state(row)
+
+                inactive = self._inactive_perturbation_sets(
+                    0 if self.separate_feature_sets else None)
+                if not inactive:
+                    break
+
+                if self.separate_feature_sets:
+                    for model_index in range(self.num_models):
+                        model_inactive = self._inactive_perturbation_sets(model_index)
+                        ranks = feature_ranker(self, model_index, set_for_rank)
+                        n_to_add = max(1, min(len(model_inactive),
+                            int(np.floor(len(model_inactive) * reduction_factor))))
+                        chosen = np.argsort(ranks)[-n_to_add:]
+                        additions = np.concatenate([
+                            model_inactive[index] for index in chosen])
+                        selection_order[model_index].extend(additions.tolist())
+                        self._add_features(additions,
+                            model_index, update_kernel=False)
+                else:
+                    rank_total = np.zeros(len(inactive))
+                    for model_index in range(self.num_models):
+                        rank_total += feature_ranker(self, model_index, set_for_rank)
+                    consensus = rank_items(rank_total)
+                    n_to_add = max(1, min(len(inactive),
+                        int(np.floor(len(inactive) * reduction_factor))))
+                    chosen = np.argsort(consensus)[-n_to_add:]
+                    additions = np.concatenate([
+                        inactive[index] for index in chosen])
+                    selection_order.extend(additions.tolist())
+                    self._add_features(additions, update_kernel=False)
+
+                if tune_models_each_step:
+                    self.tune_models(parameter_grid)
+                else:
+                    scaled = copy.deepcopy(baseline_parameters)
+                    current_count = (np.mean([len(features) for features in self.features])
+                                     if self.separate_feature_sets else len(self.features))
+                    parameter_sets = scaled if isinstance(scaled, list) else [scaled]
+                    for parameters in parameter_sets:
+                        if "gamma" in parameters.kernel:
+                            parameters.kernel["gamma"] *= initial_count/current_count
+                    self._update_parameters(scaled)
+                    self._train_models()
+                    self._score_models()
+
+            self.singleton_performance_ = singleton_performance
+            self.feature_performance_ = feature_performance
+            self.models, self.kernel_matrix_, self.parameters_, \
+                self.performance_, self.features = best_state
+            self._kernel_configuration_ = self._kernel_configuration(
+                self.parameters_)
+            if self.separate_feature_sets:
+                self.sorted_features = [np.asarray(features)
+                                        for features in selection_order]
+                self.feature_rank = [features.argsort() for features in self.sorted_features]
+            else:
+                self.sorted_features = np.asarray(selection_order)
+                self.feature_rank = self.sorted_features.argsort()
+        finally:
+            if previous_direction is None:
+                self.__dict__.pop("_selection_direction_", None)
+            else:
+                self._selection_direction_ = previous_direction
+
     
+    @staticmethod
+    def _normalize_perturbation_sets(perturbation_sets, available_features):
+        """Validate and normalize persistent feature perturbation groups."""
+        available_features = set(np.asarray(available_features).tolist())
+        normalized_sets = []
+        for group in perturbation_sets:
+            group = np.asarray(np.atleast_1d(group)).ravel()
+            if group.size == 0:
+                raise ValueError("perturbation_sets cannot contain an empty set")
+
+            normalized_group = list(dict.fromkeys(group.tolist()))
+            unknown_features = set(normalized_group).difference(available_features)
+            if unknown_features:
+                raise ValueError(
+                    f"perturbation set contains unknown features: "
+                    f"{sorted(unknown_features)}")
+            normalized_sets.append(normalized_group)
+
+        if not normalized_sets:
+            raise ValueError("perturbation_sets must contain at least one set")
+
+        flattened_features = [
+            feature for group in normalized_sets for feature in group]
+        if len(flattened_features) != len(set(flattened_features)):
+            raise ValueError("perturbation_sets cannot overlap")
+        missing_features = available_features.difference(flattened_features)
+        if missing_features:
+            raise ValueError(
+                f"perturbation_sets must include every feature; missing: "
+                f"{sorted(missing_features)}")
+        return normalized_sets
+
+
+    def _active_perturbation_sets(self, model_index = None):
+        if self.separate_feature_sets:
+            if model_index is None:
+                raise ValueError("model_index is required for separate feature sets")
+            current_features = self.features[model_index]
+        else:
+            current_features = self.features
+
+        active_features = set(current_features.tolist())
+        return [
+            np.asarray([
+                feature for feature in perturbation_set
+                if feature in active_features])
+            for perturbation_set in self.perturbation_sets
+            if active_features.intersection(perturbation_set)]
+
+
+    def _inactive_perturbation_sets(self, model_index=None):
+        """Return complete perturbation sets absent from the current model."""
+        if self.separate_feature_sets:
+            if model_index is None:
+                raise ValueError("model_index is required for separate feature sets")
+            current_features = self.features[model_index]
+        else:
+            current_features = self.features
+        active_features = set(np.asarray(current_features).tolist())
+        return [np.asarray(group) for group in self.perturbation_sets
+                if not active_features.intersection(group)]
+
+
     def feature_importance_(self, model_index):
-        """Estimate feature importance by leave-one-feature-out kernels."""
+        """Measure the effect of removing one or more feature groups.
+
+        Parameters
+        ----------
+        model_index : int
+            Index of the fitted cross-validation model to analyze.
+        Perturbation groups are read from ``self.perturbation_sets``. Groups
+        are intersected with the model's active features, and groups with no
+        active members are ignored.
+        """
         support_vectors = self._get_support_vectors(model_index)
         const = -0.5*(np.dot(self.models[model_index].dual_coef_[0,:],self.models[model_index].dual_coef_[0,:].transpose()))
         
@@ -471,13 +742,26 @@ class svmSet():
         else:
             parameters = self.parameters_.kernel
 
+        forward = getattr(self, "_selection_direction_", None) == "forward"
+        normalized_sets = (self._inactive_perturbation_sets(model_index)
+                           if forward else
+                           self._active_perturbation_sets(model_index))
+        if not forward:
+            for group in normalized_sets:
+                if group.size == len(current_features):
+                    raise ValueError("a perturbation set cannot remove all active features")
+
         K = self.kernel.compute(support_vectors, 
                                 feature_index = current_features, 
                                 parameters = parameters)
 
-        criteria = np.zeros(len(current_features))
-        for z in range(len(current_features)):
-            features_z = np.delete(current_features, z)
+        criteria = np.zeros(len(normalized_sets))
+        for z, perturbation_set in enumerate(normalized_sets):
+            if forward:
+                features_z = np.concatenate((current_features, perturbation_set))
+            else:
+                features_z = current_features[
+                    ~np.isin(current_features, perturbation_set)]
             Kp = self.kernel.compute(support_vectors, 
                                      feature_index = features_z, 
                                      parameters = parameters)
@@ -488,7 +772,6 @@ class svmSet():
 
     
     def probability_perturbation_(self, model_index, X):
-        """Estimate feature contributions to calibrated class probabilities."""
         probability = self.models[model_index].predict_proba(X)
         decision = self.models[model_index].decision_function(X)
         
@@ -502,7 +785,6 @@ class svmSet():
 
     
     def decision_perturbation_(self,model_index,X):
-        """Estimate per-feature changes in the SVM decision function."""
         support_vectors = self._get_support_vectors(model_index)
 
         if self.separate_feature_sets:
@@ -520,22 +802,34 @@ class svmSet():
                                 parameters = parameters, 
                                 Y = X)
         
-        decision_perturbation = np.zeros([len(X), len(current_features)])
-        for z in range(len(current_features)):
-            features_z = np.delete(current_features, z)
+        forward = getattr(self, "_selection_direction_", None) == "forward"
+        perturbation_sets = (self._inactive_perturbation_sets(model_index)
+                             if forward else
+                             self._active_perturbation_sets(model_index))
+        decision_perturbation = np.zeros([len(X), len(perturbation_sets)])
+        for z, perturbation_set in enumerate(perturbation_sets):
+            if forward:
+                features_z = np.concatenate((current_features, perturbation_set))
+            else:
+                features_z = current_features[
+                    ~np.isin(current_features, perturbation_set)]
+            if not forward and len(features_z) == 0:
+                raise ValueError("a perturbation set cannot remove all active features")
             Kp = self.kernel.compute(support_vectors, 
                                      feature_index = features_z, 
                                      parameters = parameters, 
                                      Y = X)
             
-            decision_product = np.transpose(np.tile(self.models[model_index].dual_coef_[0,:], (len(X),1)))*(K-Kp)
-            decision_perturbation[:,z] = np.array([sum(decision_product[:,i]) for i in range(decision_product.shape[1])])
+            # K has shape (n_support, n_samples). A vector-matrix product
+            # performs the support-vector reduction directly, avoiding a
+            # tiled coefficient matrix and an equally large product array.
+            decision_perturbation[:,z] = np.matmul(
+                self.models[model_index].dual_coef_[0, :], K - Kp)
                         
         return decision_perturbation
 
             
     def decision_gradient_(self,model_index,X):
-        """Evaluate analytical decision-function gradients for observations."""
         support_vectors = self._get_support_vectors(model_index)
 
         if self.separate_feature_sets:
@@ -558,14 +852,13 @@ class svmSet():
                                               parameters = parameters,
                                               Y = X)    
             
-            decision_product = np.transpose(np.tile(self.models[model_index].dual_coef_[0,:], (len(X),1)))*dK
-            decision_gradient[:,j] = np.array([sum(decision_product[:,i]) for i in range(decision_product.shape[1])])
+            decision_gradient[:,j] = np.matmul(
+                self.models[model_index].dual_coef_[0, :], dK)
 
         return decision_gradient
 
     
     def _find_boundary_points(self, model_index, X):
-        """Find nearby zero-decision reference points by optimization."""
         boundary_points = np.zeros([len(X), self.cv.X.shape[1]])
         for i in range(0,len(X)):
             opt = minimize(svc_dec2, X[i,:], args=(self,model_index))
@@ -574,22 +867,38 @@ class svmSet():
         return boundary_points
 
     
-    def integrated_gradient(self, X, model_index = None, num_steps = 20, ref_point = []):
-        """Calculate integrated-gradient feature attributions.
+    def integrated_gradient(self, X, model_index = None, num_steps = 20,
+                            reference_point = None, ref_point = None):
+        """Calculate integrated gradients from supplied or inferred references.
 
-        Parameters
-        ----------
-        X : numpy.ndarray
-            Observations to explain.
-        model_index : int, optional
-            Explain one split model; otherwise average across models.
-        num_steps : int, default=20
-            Integration points between each reference and observation.
-        ref_point : array-like, optional
-            Reference point. Classification defaults to an optimized boundary
-            point; regression requires an explicit reference.
+        ``reference_point`` may be one feature vector shared by every sample,
+        or an array with one reference vector per row of ``X``. Supplying it
+        bypasses decision-boundary optimization entirely. ``ref_point`` is
+        retained as a backward-compatible alias.
         """
-        if isinstance(self.SVM, SVR) & (len(ref_point) == 0):
+        if reference_point is not None and ref_point is not None:
+            raise ValueError("specify only reference_point, not both aliases")
+        if reference_point is None:
+            reference_point = ref_point
+
+        X = np.asarray(X)
+        if X.ndim != 2 or X.shape[1] != self.cv.X.shape[1]:
+            raise ValueError("X must have shape (n_samples, n_features)")
+
+        supplied_reference = reference_point is not None
+        if supplied_reference:
+            reference_point = np.asarray(reference_point)
+            if reference_point.ndim == 1:
+                if reference_point.shape[0] != X.shape[1]:
+                    raise ValueError("reference_point must match X's feature count")
+                reference_points = np.broadcast_to(reference_point, X.shape)
+            elif reference_point.shape == X.shape:
+                reference_points = reference_point
+            else:
+                raise ValueError(
+                    "reference_point must have shape (n_features,) or match X")
+
+        if isinstance(self.SVM, SVR) and not supplied_reference:
             raise NameError('SVRneedsRefPoint')
 
         if self.separate_feature_sets & (model_index is None):
@@ -607,20 +916,19 @@ class svmSet():
             
         integrated_gradient = np.zeros([len(X), len(features)])    
         for m in model_indices:
-            if len(ref_point) == 0:
-                ref_points = self._find_boundary_points(m,X)
+            if supplied_reference:
+                model_reference_points = reference_points
+            else:
+                model_reference_points = self._find_boundary_points(m,X)
         
             for i in range(0,len(X)):
-                if len(ref_point) == 0:
-                    x_start = ref_points[i,:]
-                else:
-                    x_start = ref_point
+                x_start = model_reference_points[i, :]
                 
                 xi = X[i,:]
                 x_diff = xi - x_start
                 
-                x_steps = np.tile(x_start, (num_steps,1)) + np.tile(x_diff, (num_steps,1)) \
-                            *np.transpose(np.tile(np.linspace(0, 1,num_steps), (self.cv.X.shape[1],1)))
+                path_fraction = np.linspace(0, 1, num_steps)[:, np.newaxis]
+                x_steps = x_start + path_fraction*x_diff
 
                 gradient_steps = self.decision_gradient_(m,x_steps)
                 if isinstance(self.SVM, SVR):
@@ -640,7 +948,6 @@ class svmSet():
 
     
     def plot_performance(self,metric = 'score'):
-        """Plot a feature-selection metric against the feature count."""
         x = [self.feature_performance_[key]['num_features'] for key in self.feature_performance_.keys()]
         y = [self.feature_performance_[key][metric] for key in self.feature_performance_.keys()]
         
@@ -650,18 +957,6 @@ class svmSet():
 
 
     def predict(self, X, model_index = None, use_voting = False):
-        """Predict targets by averaging decisions or voting across models.
-
-        Parameters
-        ----------
-        X : numpy.ndarray
-            Observations to predict.
-        model_index : int, optional
-            Use one split model instead of the ensemble.
-        use_voting : bool, default=False
-            For classification, combine discrete model votes instead of mean
-            decision values.
-        """
         if isinstance(self.SVM, SVR):
             if model_index == None:
                 model_indices = [i for i in range(self.num_models)]
@@ -727,7 +1022,6 @@ class svmSet():
         
 
     def decision_function(self, X, model_index = None):     
-        """Return decision values averaged across selected models."""
         if model_index == None:
             model_indices = [i for i in range(self.num_models)]
         else:
@@ -756,21 +1050,15 @@ class svmSet():
 
 
     def enrichment_score(self,metric = 'score',type = 'auc'):
-        """Summarize a feature-selection performance trajectory.
-
-        Parameters
-        ----------
-        metric : str, default="score"
-            Metric stored in each feature-selection result.
-        type : {"auc", "max"}, default="auc"
-            Return normalized area under the trajectory or its maximum value.
-        """
         enrichment_score = []
         
         match type:
             case "auc":
-                x = [self.feature_performance_[key]['num_features'] for key in self.feature_performance_.keys()]
-                y = [self.feature_performance_[key][metric] for key in self.feature_performance_.keys()]
+                points = sorted(
+                    ((row['num_features'], row[metric])
+                     for row in self.feature_performance_.values()),
+                    reverse=True)
+                x, y = zip(*points)
                 
                 area = np.trapz(y,x)
                 enrichment_score = -area/max(x)
