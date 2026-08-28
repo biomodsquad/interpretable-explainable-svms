@@ -64,6 +64,9 @@ def test_greedy_forward_selection_evaluates_singletons_and_orders_features():
     assert len(ensemble.singleton_performance_) == ensemble.cv.X.shape[1]
     assert sorted(ensemble.sorted_features.tolist()) == list(range(ensemble.cv.X.shape[1]))
     assert len(ensemble.features) >= 1
+    scores = [row["score"] for row in ensemble.feature_performance_.values()]
+    expected_size = ensemble.feature_performance_[int(np.argmax(scores))]["num_features"]
+    assert len(ensemble.features) == expected_size
 
 
 def test_forward_decision_perturbation_has_opposite_sign():

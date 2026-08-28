@@ -541,7 +541,7 @@ class svmSet():
 
         def save_state(row):
             nonlocal best_score, best_state
-            if row.score >= best_score:
+            if row.score > best_score:
                 best_score = row.score
                 best_state = (copy.deepcopy(self.models),
                               copy.deepcopy(self.kernel_matrix_),
@@ -562,8 +562,7 @@ class svmSet():
                 self.tune_models(parameter_grid)
                 row = mean_row()
                 singleton_performance[candidate_index] = copy.deepcopy(row)
-                if row.score >= best_score:
-                    save_state(row)
+                save_state(row)
 
             self.models, self.kernel_matrix_, self.parameters_, \
                 self.performance_, self.features = copy.deepcopy(best_state)
