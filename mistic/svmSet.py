@@ -346,6 +346,52 @@ class svmSet():
             if requested.intersection(perturbation_set):
                 expanded.extend(perturbation_set)
         self._set_features(expanded, model_index, update_kernel)
+
+
+    def set_num_features(self, num_features, parameter_grid):
+        """Use the top-ranked features and retune the ensemble.
+
+        This method is intended for use after a feature-selection method has
+        populated ``sorted_features``. For ensembles with separate feature
+        sets, each model uses the top features from its own ranking.
+
+        Parameters
+        ----------
+        num_features : int
+            Number of highest-ranked features to retain.
+        parameter_grid : iterable
+            Parameter candidates accepted by :meth:`tune_models`.
+        """
+        if not hasattr(self, "sorted_features"):
+            raise RuntimeError(
+                "feature selection must be run before setting the number of features")
+        if (isinstance(num_features, (bool, np.bool_)) or
+                not isinstance(num_features, (int, np.integer))):
+            raise TypeError("num_features must be an integer")
+        if num_features < 1:
+            raise ValueError("num_features must be at least 1")
+
+        rankings = (self.sorted_features if self.separate_feature_sets
+                    else [self.sorted_features])
+        expected_rankings = self.num_models if self.separate_feature_sets else 1
+        if len(rankings) != expected_rankings:
+            raise RuntimeError("feature rankings do not match the ensemble")
+        if any(num_features > len(ranking) for ranking in rankings):
+            raise ValueError(
+                "num_features cannot exceed the number of ranked features")
+
+        if self.separate_feature_sets:
+            for model_index, ranking in enumerate(rankings):
+                self._set_features(
+                    np.asarray(ranking)[:num_features],
+                    model_index=model_index,
+                    update_kernel=False)
+        else:
+            self._set_features(
+                np.asarray(rankings[0])[:num_features],
+                update_kernel=False)
+
+        self.tune_models(parameter_grid)
             
     
     def greedy_backward_selection(self, parameter_grid, 
@@ -953,6 +999,77 @@ class svmSet():
         plt.plot(x,y)
         plt.xlabel('# of features') 
         plt.ylabel(metric) 
+
+
+    def find_knee(self, metric='score'):
+        """Return the feature count at the knee of a performance curve.
+
+        The curve is sorted by feature count and normalized to the unit
+        square. The knee is the interior point with the greatest vertical
+        distance above the diagonal, corresponding to the point after which
+        adding features produces diminishing gains in ``metric``.
+
+        Parameters
+        ----------
+        metric : str, default="score"
+            Higher-is-better performance value stored in each row of
+            ``feature_performance_``.
+
+        Returns
+        -------
+        int or float
+            Number of features at the knee. The value is also stored in
+            ``knee_num_features_``.
+        """
+        if not hasattr(self, "feature_performance_"):
+            raise RuntimeError(
+                "feature selection must be run before finding a knee")
+
+        try:
+            points = np.asarray([
+                (row["num_features"], row[metric])
+                for row in self.feature_performance_.values()
+            ], dtype=float)
+        except KeyError as error:
+            raise KeyError(
+                f"feature performance does not contain {error.args[0]!r}") from error
+
+        if points.ndim != 2 or points.shape[0] < 3:
+            raise ValueError("at least three performance points are required")
+        if not np.all(np.isfinite(points)):
+            raise ValueError("feature counts and performance values must be finite")
+
+        # Keep the strongest result when multiple selection steps have the
+        # same feature count, then make the result independent of traversal
+        # direction (forward or backward selection).
+        feature_counts = np.unique(points[:, 0])
+        performance = np.asarray([
+            np.max(points[points[:, 0] == count, 1])
+            for count in feature_counts
+        ])
+        if len(feature_counts) < 3:
+            raise ValueError("at least three distinct feature counts are required")
+
+        feature_range = np.ptp(feature_counts)
+        performance_range = np.ptp(performance)
+        if feature_range == 0 or performance_range == 0:
+            raise ValueError("a knee cannot be found in a flat curve")
+
+        normalized_features = (
+            (feature_counts - feature_counts[0]) / feature_range)
+        normalized_performance = (
+            (performance - np.min(performance)) / performance_range)
+        distance = normalized_performance - normalized_features
+        interior_distance = distance[1:-1]
+        knee_offset = int(np.argmax(interior_distance))
+        if interior_distance[knee_offset] <= np.finfo(float).eps:
+            raise ValueError("the performance curve does not contain a knee")
+
+        knee = feature_counts[knee_offset + 1]
+        if knee.is_integer():
+            knee = int(knee)
+        self.knee_num_features_ = knee
+        return knee
 
 
     def predict(self, X, model_index = None, use_voting = False):

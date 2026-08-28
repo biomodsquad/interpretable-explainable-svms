@@ -69,6 +69,38 @@ def test_greedy_forward_selection_evaluates_singletons_and_orders_features():
     assert len(ensemble.features) == expected_size
 
 
+def test_set_num_features_uses_ranking_and_retunes():
+    ensemble = _fitted_ensemble()
+    parameter_grid = [
+        paramSet({"C": 0.1}, {}),
+        paramSet({"C": 1.0}, {}),
+    ]
+    ensemble.sorted_features = np.array([4, 2, 5, 0, 1, 3])
+
+    ensemble.set_num_features(3, parameter_grid)
+
+    np.testing.assert_array_equal(ensemble.features, [2, 4, 5])
+    assert ensemble.parameters_.model["C"] in {0.1, 1.0}
+    assert ensemble.performance_.score is not None
+    assert ensemble.kernel_matrix_.shape == (ensemble.num_samples,
+                                              ensemble.num_samples)
+
+
+def test_set_num_features_requires_selection_and_valid_count():
+    ensemble = _fitted_ensemble()
+    parameter_grid = [paramSet({"C": 1.0}, {})]
+
+    with np.testing.assert_raises_regex(RuntimeError, "feature selection"):
+        ensemble.set_num_features(2, parameter_grid)
+
+    ensemble.sorted_features = np.arange(ensemble.cv.X.shape[1])
+    for invalid_count in (0, ensemble.cv.X.shape[1] + 1):
+        with np.testing.assert_raises(ValueError):
+            ensemble.set_num_features(invalid_count, parameter_grid)
+    with np.testing.assert_raises(TypeError):
+        ensemble.set_num_features(2.5, parameter_grid)
+
+
 def test_forward_decision_perturbation_has_opposite_sign():
     ensemble = _fitted_ensemble()
     X = ensemble.cv.X[:5]
@@ -101,3 +133,36 @@ def test_enrichment_score_sorts_feature_counts_descending():
 
     assert forward_score == 0.3125
     assert backward_score == forward_score
+
+
+def test_find_knee_is_independent_of_selection_direction():
+    ensemble = _fitted_ensemble()
+    points = [
+        (1, 0.00),
+        (2, 0.70),
+        (3, 0.90),
+        (4, 0.97),
+        (5, 1.00),
+    ]
+
+    for ordered_points in (points, reversed(points)):
+        ensemble.feature_performance_ = {
+            index: {"num_features": count, "score": score}
+            for index, (count, score) in enumerate(ordered_points)
+        }
+        assert ensemble.find_knee() == 2
+        assert ensemble.knee_num_features_ == 2
+
+
+def test_find_knee_requires_a_nonflat_curve_with_three_points():
+    ensemble = _fitted_ensemble()
+    with np.testing.assert_raises_regex(RuntimeError, "feature selection"):
+        ensemble.find_knee()
+
+    ensemble.feature_performance_ = {
+        0: {"num_features": 1, "score": 0.5},
+        1: {"num_features": 2, "score": 0.5},
+        2: {"num_features": 3, "score": 0.5},
+    }
+    with np.testing.assert_raises_regex(ValueError, "flat curve"):
+        ensemble.find_knee()

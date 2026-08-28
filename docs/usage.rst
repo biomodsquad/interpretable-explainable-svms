@@ -24,3 +24,9 @@ kernel SVM, and tunes model/kernel parameter pairs::
    ])
    predictions = ensemble.predict(X_new)
 
+After running greedy feature selection, a specific number of the highest-ranked
+features can be selected and the ensemble retuned with a parameter grid. The
+knee of the stored performance curve provides a data-driven feature count::
+
+   num_features = ensemble.find_knee()
+   ensemble.set_num_features(num_features, parameter_grid)
