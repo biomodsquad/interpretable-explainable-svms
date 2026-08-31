@@ -44,7 +44,7 @@ def test_cv_and_ensemble_are_pickleable():
     np.testing.assert_array_equal(restored.cv.X, ensemble.cv.X)
 
 
-def test_print_performance_averages_separate_model_results(capsys):
+def test_mean_performance_averages_separate_model_results():
     ensemble = _fitted_ensemble()
     ensemble.separate_parameters = True
     ensemble.performance_ = [
@@ -52,11 +52,9 @@ def test_print_performance_averages_separate_model_results(capsys):
         {"score": 0.8, "auc": np.float64(0.9), "kernel": "linear"},
     ]
 
-    performance = ensemble.print_performance()
+    performance = ensemble.mean_performance()
 
     assert performance == {"score": 0.7, "auc": 0.8, "kernel": "linear"}
-    assert capsys.readouterr().out == (
-        "{'score': 0.7, 'auc': 0.8, 'kernel': 'linear'}\n")
 
 
 def test_mean_performance_preserves_existing_aggregate():

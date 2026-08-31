@@ -245,23 +245,6 @@ class svmSet():
                 summary[key] = copy.deepcopy(values[0])
         return summary
 
-    def print_performance(self, file=None):
-        """Print and return performance averaged across all model sets.
-
-        Parameters
-        ----------
-        file : file-like object, optional
-            Destination passed to :func:`print`; defaults to standard output.
-
-        Returns
-        -------
-        mistic.utility.dotdict
-            The same aggregate produced by :meth:`mean_performance`.
-        """
-        performance = self.mean_performance()
-        print(dict(performance), file=file)
-        return performance
-
     
     def tune_models(self, parameter_grid):
         if self.separate_parameters:
