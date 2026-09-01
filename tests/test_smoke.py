@@ -6,11 +6,11 @@ import pickle
 import numpy as np
 from sklearn.datasets import load_breast_cancer
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
+from sklearn.svm import OneClassSVM, SVC, SVR
 
 import mistic
 from mistic import (IntegratedGradientsResult, cvSet, kernelWrapper, paramSet,
-                    score_svc, svmSet)
+                    score_ocsvm, score_svc, score_svr, svmSet)
 from mistic.utility import combined_rank, rank_items
 
 
@@ -34,7 +34,7 @@ def test_public_api_and_version():
     assert mistic.__version__ == "0.1.1"
     assert set(mistic.__all__) == {
         "combined_rank", "cvSet", "IntegratedGradientsResult", "kernelWrapper", "paramSet", "perDiff",
-        "score_svc", "score_svr", "svmSet",
+        "score_ocsvm", "score_svc", "score_svr", "svmSet",
     }
 
 
@@ -42,6 +42,22 @@ def test_cv_and_ensemble_are_pickleable():
     ensemble = _fitted_ensemble()
     restored = pickle.loads(pickle.dumps(ensemble))
     np.testing.assert_array_equal(restored.cv.X, ensemble.cv.X)
+    np.testing.assert_array_equal(
+        restored.predict(restored.cv.X[:5]),
+        ensemble.predict(ensemble.cv.X[:5]))
+
+
+def test_legacy_pickle_without_unified_model_falls_back_to_set_prediction():
+    ensemble = _fitted_ensemble()
+    for attribute in (
+            "unified_model_", "unified_parameters_",
+            "unified_prediction_features_"):
+        ensemble.__dict__.pop(attribute)
+    restored = pickle.loads(pickle.dumps(ensemble))
+
+    np.testing.assert_array_equal(
+        restored.predict(restored.cv.X[:5]),
+        restored.predict(restored.cv.X[:5], prediction_mode="set"))
 
 
 def test_mean_performance_averages_separate_model_results():
@@ -152,7 +168,8 @@ def test_tuning_prediction_and_ranking():
     assert np.isfinite(ensemble.decision_value_cutoff_)
     calibration_indices = ensemble.cv.development_indices_
     expected_cutoff = ensemble._optimal_f1_cutoff(
-        ensemble.decision_function(ensemble.cv.X[calibration_indices]),
+        ensemble.decision_function(
+            ensemble.cv.X[calibration_indices], prediction_mode="set"),
         ensemble.cv.y[calibration_indices],
         positive_class=ensemble.models[0].classes_[1],
     )
@@ -173,11 +190,57 @@ def test_optimal_decision_cutoff_maximizes_f1_and_predict_uses_it():
     assert cutoff == 0.1
     ensemble = _fitted_ensemble()
     ensemble.decision_value_cutoff_ = cutoff
-    ensemble.decision_function = lambda X, model_index=None: decision_values
+    ensemble.decision_function = lambda X, model_index=None, prediction_mode="unified": decision_values
     np.testing.assert_array_equal(
-        ensemble.predict(np.zeros((len(decision_values), 6))),
+        ensemble.predict(
+            np.zeros((len(decision_values), 6)), prediction_mode="set"),
         [0, 0, 0, 1, 1],
     )
+
+
+def test_unified_classifier_is_default_and_set_prediction_is_available():
+    ensemble = _fitted_ensemble()
+    X = ensemble.cv.X[:8]
+    kernel = ensemble._unified_inference_kernel(X)
+
+    np.testing.assert_array_equal(
+        ensemble.predict(X), ensemble.unified_model_.predict(kernel))
+    np.testing.assert_allclose(
+        ensemble.decision_function(X),
+        ensemble.unified_model_.decision_function(kernel))
+    expected_set_decision = np.mean([
+        ensemble.models[index].decision_function(
+            ensemble._inference_kernel(X, index))
+        for index in range(ensemble.num_models)
+    ], axis=0)
+    np.testing.assert_allclose(
+        ensemble.decision_function(X, prediction_mode="set"),
+        expected_set_decision)
+
+
+def test_unified_regressor_is_default_and_set_prediction_is_available():
+    rng = np.random.default_rng(29)
+    X = rng.normal(size=(60, 5))
+    y = 2 * X[:, 0] - X[:, 2] + rng.normal(scale=0.1, size=len(X))
+    splits = cvSet(X, y)
+    splits.k_fold(num_folds=3)
+    ensemble = svmSet(
+        SVR(kernel="precomputed"), splits, score_svr(weight=0.0).score,
+        kernel=kernelWrapper("linear"))
+    ensemble.tune_models([paramSet({"C": 1.0, "epsilon": 0.1}, {})])
+    probe = X[:7]
+
+    np.testing.assert_allclose(
+        ensemble.predict(probe),
+        ensemble.unified_model_.predict(
+            ensemble._unified_inference_kernel(probe)))
+    expected_set = np.mean([
+        ensemble.models[index].predict(
+            ensemble._inference_kernel(probe, index))
+        for index in range(ensemble.num_models)
+    ], axis=0)
+    np.testing.assert_allclose(
+        ensemble.predict(probe, prediction_mode="set"), expected_set)
 
 
 def test_integrated_gradient_averages_models_with_separate_feature_sets():
@@ -209,6 +272,49 @@ def test_integrated_gradient_averages_models_with_separate_feature_sets():
     assert combined.shape == (1, 4)  # sorted union: [0, 1, 2, 4]
     np.testing.assert_array_equal(ensemble.unified_features, [0, 1, 2, 4])
     np.testing.assert_allclose(combined, expected)
+
+
+def test_integrated_gradients_satisfy_svc_decision_completeness():
+    ensemble = _fitted_ensemble()
+    X = ensemble.cv.X[:5]
+    reference = np.zeros(X.shape[1])
+
+    values = ensemble.integrated_gradient(
+        X, reference_point=reference, num_steps=4)
+    expected = (
+            ensemble.decision_function(X, prediction_mode="set")
+            - ensemble.decision_function(
+                np.broadcast_to(reference, X.shape), prediction_mode="set")
+    )
+
+    np.testing.assert_allclose(values.sum(axis=1), expected, atol=1e-10)
+
+
+def test_integrated_gradients_satisfy_svr_prediction_completeness():
+    rng = np.random.default_rng(23)
+    X = rng.normal(size=(80, 4))
+    y = 1.5 * X[:, 0] - 0.75 * X[:, 2] + rng.normal(scale=0.05, size=80)
+    splits = cvSet(X, y)
+    splits.k_fold(num_folds=2)
+    ensemble = svmSet(
+        SVR(kernel="precomputed"),
+        splits,
+        score_svr(weight=0.0).score,
+        kernel=kernelWrapper("linear"),
+    )
+    ensemble.tune_models([paramSet({"C": 1.0, "epsilon": 0.05}, {})])
+    explained = X[:5]
+    reference = np.zeros(X.shape[1])
+    reference_rows = np.broadcast_to(reference, explained.shape)
+
+    values = ensemble.integrated_gradient(
+        explained, reference_point=reference, num_steps=4)
+    expected = (
+            ensemble.predict(explained, prediction_mode="set")
+            - ensemble.predict(reference_rows, prediction_mode="set")
+    )
+
+    np.testing.assert_allclose(values.sum(axis=1), expected, atol=1e-10)
 
 
 def test_integrated_gradients_result_metadata_and_plots():
@@ -333,7 +439,7 @@ def test_inference_kernel_computes_support_vectors_only():
         return original_compute(*args, **kwargs)
 
     ensemble.kernel.compute = track_compute
-    actual_decisions = ensemble.decision_function(X)
+    actual_decisions = ensemble.decision_function(X, prediction_mode="set")
 
     np.testing.assert_allclose(actual_decisions, expected_decisions)
     assert computed_against == [len(model.support_) for model in ensemble.models]
@@ -1034,3 +1140,91 @@ def test_find_knee_requires_a_nonflat_curve_with_three_points():
     }
     with np.testing.assert_raises_regex(ValueError, "flat curve"):
         ensemble.find_knee()
+
+
+def _fitted_one_class_ensemble():
+    rng = np.random.default_rng(42)
+    inliers = rng.normal(0, 0.45, size=(48, 4))
+    outliers = rng.normal(4, 0.35, size=(12, 4))
+    X = np.vstack((inliers, outliers))
+    y = np.concatenate((np.ones(len(inliers)), -np.ones(len(outliers))))
+    splits = cvSet(X, y, num_feature_medoids=4)
+    splits.one_class(num_sets=2, validation_size=0.25, random_seed=3)
+    ensemble = svmSet(
+        OneClassSVM(kernel="precomputed"), splits, score_ocsvm().score,
+        kernel=kernelWrapper("rbf"))
+    ensemble.tune_models([paramSet({"nu": 0.1}, {"gamma": 0.5})])
+    return ensemble
+
+
+def test_one_class_splits_never_train_on_outliers():
+    ensemble = _fitted_one_class_ensemble()
+    for train, test in zip(ensemble.cv.train, ensemble.cv.test):
+        assert np.all(ensemble.cv.y[train] == 1)
+        assert np.any(ensemble.cv.y[test] == -1)
+
+
+def test_one_class_prediction_and_decision_match_sklearn_conventions():
+    ensemble = _fitted_one_class_ensemble()
+    X = ensemble.cv.X[:10]
+    decision = ensemble.decision_function(X)
+    prediction = ensemble.predict(X)
+    np.testing.assert_array_equal(prediction, np.where(decision >= 0, 1, -1))
+
+    set_decision = ensemble.decision_function(X, prediction_mode="set")
+    set_prediction = ensemble.predict(X, prediction_mode="set")
+    np.testing.assert_array_equal(
+        set_prediction, np.where(set_decision >= 0, 1, -1))
+
+
+def test_one_class_decision_perturbation_is_exact_frozen_model_change():
+    ensemble = _fitted_one_class_ensemble()
+    model_index = 0
+    X = ensemble.cv.X[:7]
+    actual = ensemble.decision_perturbation_(model_index, X)[:, 0]
+    model = ensemble.models[model_index]
+    support = ensemble._get_support_vectors(model_index)
+    features = ensemble.features
+    parameters = ensemble.parameters_.kernel
+    full = ensemble.kernel.compute(
+        support, feature_index=features, parameters=parameters, Y=X)
+    reduced = ensemble.kernel.compute(
+        support, feature_index=features[features != 0],
+        parameters=parameters, Y=X)
+    expected = model.dual_coef_[0] @ (full-reduced)
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_one_class_importance_uses_quadratic_dual_objective_change():
+    ensemble = _fitted_one_class_ensemble()
+    model = ensemble.models[0]
+    support = ensemble._get_support_vectors(0)
+    features = ensemble.features
+    parameters = ensemble.parameters_.kernel
+    full = ensemble.kernel.compute(
+        support, feature_index=features, parameters=parameters)
+    reduced = ensemble.kernel.compute(
+        support, feature_index=features[features != 0], parameters=parameters)
+    alpha = model.dual_coef_[0]
+    expected = abs(0.5 * alpha @ (full-reduced) @ alpha)
+    np.testing.assert_allclose(ensemble.feature_importance_(0)[0], expected)
+
+
+def test_one_class_combined_rank_prefers_coverage_then_compression():
+    ensemble = _fitted_one_class_ensemble()
+    model_index = 0
+    indices = np.asarray(ensemble.cv.train[model_index])
+    X = ensemble.cv.X[indices]
+    current = ensemble.decision_function(X, model_index=model_index)
+    perturbation = ensemble.decision_perturbation_(model_index, X)
+    perturbed = current[:, np.newaxis] - perturbation
+    compression_gain = np.var(perturbed, axis=0) - np.var(current)
+    coverage = np.mean(perturbed >= 0, axis=0)
+    eligible = coverage >= 1-ensemble.models[model_index].nu
+    order = np.lexsort((compression_gain, eligible.astype(int)))
+    expected = np.empty(len(order), dtype=int)
+    expected[order] = np.arange(len(order))
+
+    actual = combined_rank(weight=1.0).compute(
+        ensemble, model_index, "train")
+    np.testing.assert_array_equal(actual, expected)

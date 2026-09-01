@@ -7,8 +7,9 @@ from scipy.optimize import minimize
 import copy
 from collections import Counter
 
-from sklearn.svm import SVR
+from sklearn.svm import OneClassSVM, SVR
 from sklearn.metrics import f1_score, roc_auc_score, r2_score
+from sklearn.base import clone
 from scipy.stats import pearsonr
 
 import random
@@ -18,6 +19,9 @@ from mistic.utility import combined_rank, kernelWrapper, score_svr, score_svc, d
 from mistic.explanations import IntegratedGradientsResult
 
 class svmSet():
+
+    def _is_one_class(self):
+        return isinstance(self.SVM, OneClassSVM)
         
     def __init__(self, SVM, cvSet, score_method, 
                  kernel = None,
@@ -58,6 +62,9 @@ class svmSet():
 
         self.models = []
         self.X_ind = []
+        self.unified_model_ = None
+        self.unified_parameters_ = None
+        self.unified_prediction_features_ = None
         # Binary classifiers replace this default with an out-of-fold F1
         # optimum after tuning. Keeping the default makes an untuned ensemble
         # and older serialized ensembles behave as they did previously.
@@ -80,6 +87,10 @@ class svmSet():
                     [feature] for feature in range(self.cv.X.shape[1])]
             if "decision_value_cutoff_" not in self.__dict__:
                 self.decision_value_cutoff_ = 0.0
+            if "unified_model_" not in self.__dict__:
+                self.unified_model_ = None
+                self.unified_parameters_ = None
+                self.unified_prediction_features_ = None
             self._update_unified_feature_attributes()
 
     def _update_unified_feature_attributes(self):
@@ -112,7 +123,10 @@ class svmSet():
             else:
                 kernel_matrix = self._get_kernel_matrix(self.X_ind[i],self.X_ind[i])
                 
-            self.models[i].fit(kernel_matrix, self.cv.y[self.X_ind[i]])
+            if self._is_one_class():
+                self.models[i].fit(kernel_matrix)
+            else:
+                self.models[i].fit(kernel_matrix, self.cv.y[self.X_ind[i]])
 
     
     def _update_kernel_matrix(self):
@@ -247,6 +261,7 @@ class svmSet():
 
     
     def tune_models(self, parameter_grid):
+        parameter_grid = list(parameter_grid)
         if self.separate_parameters:
             best_score = self.num_models*[-1e12]
             best_models = self.num_models*[0]
@@ -296,9 +311,132 @@ class svmSet():
         self._update_parameters(best_parameters, update_kernel = False)
         self.kernel_matrix_ = best_kernel_matrix
         self._kernel_configuration_ = self._kernel_configuration(best_parameters)
-        if (not isinstance(self.SVM, SVR) and
+        if (not isinstance(self.SVM, SVR) and not self._is_one_class() and
                 np.asarray(self.models[0].classes_).size == 2):
             self.calibrate_decision_value_cutoff()
+        if not getattr(self, "_defer_unified_fit_", False):
+            self.fit_unified_model(parameter_grid)
+
+
+    def _tune_member_models(self, parameter_grid):
+        """Tune member models without fitting an intermediate unified model."""
+        previous = getattr(self, "_defer_unified_fit_", False)
+        self._defer_unified_fit_ = True
+        try:
+            self.tune_models(parameter_grid)
+        finally:
+            self._defer_unified_fit_ = previous
+
+
+    def _ranked_unified_prediction_features(self):
+        """Return the knee-limited unified feature ranking for prediction."""
+        unified = set(np.asarray(self.unified_features, dtype=int))
+        ranking = getattr(self, "unified_sorted_features", None)
+        if ranking is None:
+            ranked = np.asarray(sorted(unified), dtype=int)
+        else:
+            ranked = np.asarray(
+                [feature for feature in ranking if feature in unified], dtype=int)
+        limit = getattr(self, "knee_num_features_", len(ranked))
+        return ranked[:min(int(limit), len(ranked))]
+
+
+    def _score_unified_fold(self, model, kernel_matrix, y_true):
+        """Apply the configured MiSTIC score to a unified validation fold."""
+        predictions = model.predict(kernel_matrix)
+        if self._is_one_class():
+            labels = np.unique(y_true)
+            if not np.all(np.isin(labels, [-1, 1])):
+                raise ValueError("one-class validation labels must be -1 or +1")
+            if labels.size == 1:
+                return float(np.mean(predictions == 1))
+            f1 = f1_score(y_true, predictions, pos_label=1)
+            auc = roc_auc_score(y_true, model.decision_function(kernel_matrix))
+            weight = getattr(getattr(self.score, "__self__", None), "weight", 0.5)
+            return weight * auc + (1-weight) * f1
+        if isinstance(self.SVM, SVR):
+            if len(np.unique(predictions)) <= 2:
+                pearson = 0.00001
+                coefficient = 0.00001
+            else:
+                pearson = pearsonr(y_true, predictions).statistic ** 2
+                coefficient = r2_score(y_true, predictions)
+            weight = getattr(getattr(self.score, "__self__", None), "weight", 0.5)
+            return weight * float(pearson) + (1-weight) * max(0.00001, coefficient)
+
+        classes = np.asarray(model.classes_)
+        if classes.size != 2:
+            return float(np.mean(predictions == y_true))
+        positive = classes[1]
+        f1 = f1_score(y_true, predictions, pos_label=positive)
+        auc = roc_auc_score(y_true, model.decision_function(kernel_matrix))
+        weight = getattr(getattr(self.score, "__self__", None), "weight", 0.5)
+        return weight * auc + (1-weight) * f1
+
+
+    def fit_unified_model(self, parameter_grid):
+        """Tune and fit one SVM on the knee-ranked unified feature subset.
+
+        Candidate parameters are evaluated with the existing ``cvSet``
+        splits. The winning model is then fitted once on all labeled samples
+        supplied to the ``cvSet``. Member models remain unchanged and are
+        still available through ``prediction_mode='set'`` or ``model_index``.
+        """
+        parameter_grid = list(parameter_grid)
+        if not parameter_grid:
+            raise ValueError("parameter_grid must contain at least one candidate")
+        features = self._ranked_unified_prediction_features()
+        if not len(features):
+            raise RuntimeError("the unified predictor requires selected features")
+
+        best_score = -np.inf
+        best_parameters = None
+        for parameters in parameter_grid:
+            fold_scores = []
+            for train_indices, test_indices in zip(self.cv.train, self.cv.test):
+                train_indices = np.asarray(train_indices, dtype=int)
+                test_indices = np.asarray(test_indices, dtype=int)
+                model = clone(self.SVM).set_params(**parameters.model)
+                train_kernel = self.kernel.compute(
+                    self.cv.X[train_indices], feature_index=features,
+                    parameters=parameters.kernel,
+                    Y=self.cv.X[train_indices])
+                if self._is_one_class():
+                    model.fit(train_kernel)
+                else:
+                    model.fit(train_kernel, self.cv.y[train_indices])
+                test_kernel = self.kernel.compute(
+                    self.cv.X[test_indices], feature_index=features,
+                    parameters=parameters.kernel,
+                    Y=self.cv.X[train_indices])
+                fold_scores.append(self._score_unified_fold(
+                    model, test_kernel, self.cv.y[test_indices]))
+            score = float(np.mean(fold_scores))
+            if score > best_score:
+                best_score = score
+                best_parameters = copy.deepcopy(parameters)
+
+        training_indices = (np.flatnonzero(self.cv.y == 1)
+                            if self._is_one_class() and
+                            getattr(self.cv, "type", None) == "one-class"
+                            else np.arange(self.num_samples))
+        model = clone(self.SVM).set_params(**best_parameters.model)
+        # The precomputed training kernel must be square over the observations
+        # used for fitting.
+        training_kernel = self.kernel.compute(
+            self.cv.X[training_indices], feature_index=features,
+            parameters=best_parameters.kernel,
+            Y=self.cv.X[training_indices])
+        if self._is_one_class():
+            model.fit(training_kernel)
+        else:
+            model.fit(training_kernel, self.cv.y[training_indices])
+        self.unified_model_ = model
+        self.unified_parameters_ = best_parameters
+        self.unified_prediction_features_ = features
+        self.unified_training_indices_ = training_indices
+        self.unified_cv_score_ = best_score
+        return self
 
 
     @staticmethod
@@ -359,7 +497,7 @@ class svmSet():
         calibration_indices = getattr(
             self.cv, "development_indices_", np.arange(len(self.cv.y)))
         self.decision_value_cutoff_ = self._optimal_f1_cutoff(
-            self.decision_function(self.cv.X[calibration_indices]),
+            self._set_decision_function(self.cv.X[calibration_indices]),
             self.cv.y[calibration_indices],
             positive_class=classes[1],
         )
@@ -398,6 +536,23 @@ class svmSet():
             dtype=support_kernel.dtype)
         kernel_matrix[:, support_positions] = support_kernel
         return kernel_matrix
+
+
+    def _unified_inference_kernel(self, X):
+        if self.unified_model_ is None:
+            raise RuntimeError(
+                "the unified predictor has not been fitted; call "
+                "fit_unified_model or tune_models first")
+        support_positions = self.unified_model_.support_
+        support_kernel = self.kernel.compute(
+            X, feature_index=self.unified_prediction_features_,
+            parameters=self.unified_parameters_.kernel,
+            Y=self.cv.X[self.unified_training_indices_[support_positions]])
+        kernel_matrix = np.zeros(
+            (len(X), len(self.unified_training_indices_)),
+            dtype=support_kernel.dtype)
+        kernel_matrix[:, support_positions] = support_kernel
+        return kernel_matrix
         
 
     @staticmethod
@@ -429,6 +584,7 @@ class svmSet():
 
 
     def _update_parameters(self, parameter_set, update_kernel = True):
+        self.unified_model_ = None
         self.parameters_ = parameter_set
         
         if isinstance(parameter_set,list):
@@ -449,6 +605,7 @@ class svmSet():
     
     def _remove_features(self, to_remove, model_index = None,
                          update_kernel = True):
+        self.unified_model_ = None
         self._reset_kernel_matrix()
         self._kernel_configuration_ = None
 
@@ -486,6 +643,7 @@ class svmSet():
 
     def _set_features(self, features, model_index=None, update_kernel=True):
         """Replace the active feature set while preserving its original order."""
+        self.unified_model_ = None
         requested = set(np.asarray(features).ravel().tolist())
         ordered = np.asarray([
             feature for group in self.perturbation_sets for feature in group
@@ -795,7 +953,7 @@ class svmSet():
                 else:
                     self._remove_features(group, model_index=model_index,
                                           update_kernel=False)
-            self.tune_models(parameter_grid)
+            self._tune_member_models(parameter_grid)
             proposed_score = mean_score()
             score_change = proposed_score - current_score
             accepted = (score_change >= 0 or rng.random() <
@@ -858,6 +1016,7 @@ class svmSet():
         self.stochastic_converged_ = converged
         self.stochastic_iterations_ = len(history)
         self.stochastic_stop_reason_ = stop_reason
+        self.fit_unified_model(parameter_grid)
         return self
 
 
@@ -951,6 +1110,14 @@ class svmSet():
 
         def score_predictions(indices, predictions):
             y_true = self.cv.y[indices]
+            if self._is_one_class():
+                labels = np.unique(y_true)
+                if labels.size == 1:
+                    return float(np.mean(np.asarray(predictions) >= 0))
+                predicted_labels = np.where(np.asarray(predictions) >= 0, 1, -1)
+                f1 = f1_score(y_true, predicted_labels, pos_label=1)
+                auc = roc_auc_score(y_true, predictions)
+                return float(score_weight * auc + (1-score_weight) * f1)
             if isinstance(self.SVM, SVR):
                 if len(np.unique(predictions)) <= 2:
                     pearson = r2 = 0.00001
@@ -1236,7 +1403,7 @@ class svmSet():
                 self._remove_features(
                     selected.features_changed,
                     model_index=selected.model_index, update_kernel=False)
-            self.tune_models(parameter_grid)
+            self._tune_member_models(parameter_grid)
             proposed_sums, proposed_counts, proposed_covered, \
                 proposed_aggregate, proposed_outputs = out_of_fold_state()
             proposed_score = score_predictions(
@@ -1338,6 +1505,7 @@ class svmSet():
         self.ensemble_stochastic_converged_ = converged
         self.ensemble_stochastic_iterations_ = len(history)
         self.ensemble_stochastic_stop_reason_ = stop_reason
+        self.fit_unified_model(parameter_grid)
         return self
 
 
@@ -1420,7 +1588,7 @@ class svmSet():
         def fit_current_feature_set():
             nonlocal baseline_parameters
             if tune_models_each_step or baseline_parameters is None:
-                self.tune_models(parameter_grid)
+                self._tune_member_models(parameter_grid)
                 if baseline_parameters is None:
                     baseline_parameters = copy.deepcopy(self.parameters_)
                 return
@@ -1562,11 +1730,13 @@ class svmSet():
                     RuntimeWarning,
                     stacklevel=2)
                 if not tune_models_each_step:
-                    self.tune_models(parameter_grid)
+                    self._tune_member_models(parameter_grid)
             else:
                 self.set_num_features(knee_num_features, parameter_grid)
         elif not tune_models_each_step:
             self.tune_models(parameter_grid)
+        if self.unified_model_ is None:
+            self.fit_unified_model(parameter_grid)
 
 
     def greedy_forward_selection(self, parameter_grid,
@@ -1671,7 +1841,7 @@ class svmSet():
                                            update_kernel=False)
                 else:
                     self._set_features(candidate, update_kernel=False)
-                self.tune_models(parameter_grid)
+                self._tune_member_models(parameter_grid)
                 row = mean_row()
                 singleton_performance[candidate_index] = copy.deepcopy(row)
                 save_state(row)
@@ -1689,7 +1859,7 @@ class svmSet():
 
             def fit_current_feature_set():
                 if tune_models_each_step:
-                    self.tune_models(parameter_grid)
+                    self._tune_member_models(parameter_grid)
                     return
 
                 scaled = copy.deepcopy(baseline_parameters)
@@ -1838,6 +2008,8 @@ class svmSet():
                     self.set_num_features(knee_num_features, parameter_grid)
             elif not tune_models_each_step:
                 self.tune_models(parameter_grid)
+            if self.unified_model_ is None:
+                self.fit_unified_model(parameter_grid)
         finally:
             if previous_direction is None:
                 self.__dict__.pop("_selection_direction_", None)
@@ -1920,7 +2092,8 @@ class svmSet():
         active members are ignored.
         """
         support_vectors = self._get_support_vectors(model_index)
-        const = -0.5*(np.dot(self.models[model_index].dual_coef_[0,:],self.models[model_index].dual_coef_[0,:].transpose()))
+        dual_coef = self.models[model_index].dual_coef_[0, :]
+        const = -0.5*(np.dot(dual_coef, dual_coef.transpose()))
         
         if self.separate_feature_sets:
             current_features = self.features[model_index]
@@ -1956,7 +2129,15 @@ class svmSet():
                                      feature_index = features_z, 
                                      parameters = parameters)
             
-            criteria[z] = np.sum(const*(K-Kp))
+            if self._is_one_class():
+                # Frozen-coefficient change in 1/2 ||w||^2.  Its magnitude is
+                # used because non-additive kernels need not give the change
+                # a consistent sign when a feature group is removed/added.
+                criteria[z] = abs(
+                    0.5 * dual_coef @ (K-Kp) @ dual_coef)
+            else:
+                # Preserve the established SVC/SVR criterion exactly.
+                criteria[z] = np.sum(const*(K-Kp))
                 
         return criteria
 
@@ -2134,18 +2315,17 @@ class svmSet():
                 x_steps = x_start + path_fraction*x_diff
 
                 gradient_steps = self.decision_gradient_(m,x_steps)
-                if isinstance(self.SVM, SVR):
-                    ref_val = self.predict(x_start.reshape((1,-1)),model_index=m)
-                    model_gradient = (x_diff[model_features] * [
-                        np.trapz(gradient_steps[:, n], x=path_fraction[:, 0])
-                        for n in range(gradient_steps.shape[1])
-                    ] + ref_val) / len(model_features)
-                else:
-                    ref_val = self.decision_function(x_start.reshape((1,-1)),model_index=m)
-                    model_gradient = x_diff[model_features] * [
-                        np.trapz(gradient_steps[:, n], x=path_fraction[:, 0])
-                        for n in range(gradient_steps.shape[1])
-                    ] + ref_val / len(model_features)
+                # Standard integrated gradients attribute the change from the
+                # reference output, not the absolute output.  Consequently no
+                # reference prediction is distributed across features, and an
+                # SVR attribution is not divided by its feature count.  Up to
+                # numerical integration error, summing these contributions
+                # yields f(x) - f(reference) for both regression and the SVC
+                # decision function.
+                model_gradient = x_diff[model_features] * np.asarray([
+                    np.trapz(gradient_steps[:, n], x=path_fraction[:, 0])
+                    for n in range(gradient_steps.shape[1])
+                ])
                 integrated_gradient[i, output_positions] += model_gradient
 
         return integrated_gradient/len(model_indices)
@@ -2268,8 +2448,41 @@ class svmSet():
         return knee
 
 
-    def predict(self, X, model_index = None, use_voting = False):
-        if isinstance(self.SVM, SVR):
+    def predict(self, X, model_index=None, use_voting=False,
+                prediction_mode="unified"):
+        """Predict with the unified model by default.
+
+        Pass ``prediction_mode='set'`` to average member outputs as in older
+        releases. Supplying ``model_index`` continues to select one member;
+        ``use_voting=True`` likewise implies set-based classification.
+        """
+        if prediction_mode not in {"unified", "set"}:
+            raise ValueError("prediction_mode must be 'unified' or 'set'")
+        if model_index is None and not use_voting and prediction_mode == "unified":
+            # Serialized models from releases before unified prediction do
+            # not contain a final model and retain their original set output.
+            if self.unified_model_ is not None:
+                kernel_matrix = self._unified_inference_kernel(X)
+                return self.unified_model_.predict(kernel_matrix)
+            prediction_mode = "set"
+
+        if self._is_one_class():
+            if model_index is None:
+                model_indices = range(self.num_models)
+            else:
+                model_indices = [model_index]
+            if use_voting:
+                votes = np.zeros(len(X), dtype=float)
+                for m in model_indices:
+                    votes += self.models[m].predict(
+                        self._inference_kernel(X, m))
+                predictions = np.where(votes >= 0, 1, -1)
+            else:
+                decision_values = self.decision_function(
+                    X, model_index, prediction_mode="set")
+                predictions = np.where(decision_values >= 0, 1, -1)
+
+        elif isinstance(self.SVM, SVR):
             if model_index == None:
                 model_indices = [i for i in range(self.num_models)]
             else:
@@ -2299,7 +2512,8 @@ class svmSet():
                 predictions = self.models[0].classes_[(prediction_counts/len(model_indices) < 0.5) + 0] 
                 
             else:
-                decision_values = self.decision_function(X, model_index)
+                decision_values = self.decision_function(
+                    X, model_index, prediction_mode="set")
                 cutoff = (getattr(self, "decision_value_cutoff_", 0.0)
                           if model_index is None else 0.0)
                 predictions = self.models[0].classes_[
@@ -2308,7 +2522,7 @@ class svmSet():
         return predictions
         
 
-    def decision_function(self, X, model_index = None):     
+    def _set_decision_function(self, X, model_index=None):
         if model_index == None:
             model_indices = [i for i in range(self.num_models)]
         else:
@@ -2320,6 +2534,17 @@ class svmSet():
             decision_values += self.models[m].decision_function(kernel_matrix)
 
         return decision_values/len(model_indices)
+
+
+    def decision_function(self, X, model_index=None, prediction_mode="unified"):
+        """Return unified decision values, or member-set values on request."""
+        if prediction_mode not in {"unified", "set"}:
+            raise ValueError("prediction_mode must be 'unified' or 'set'")
+        if model_index is None and prediction_mode == "unified":
+            if self.unified_model_ is not None:
+                return self.unified_model_.decision_function(
+                    self._unified_inference_kernel(X))
+        return self._set_decision_function(X, model_index)
 
 
     def enrichment_score(self,metric = 'score',type = 'auc'):

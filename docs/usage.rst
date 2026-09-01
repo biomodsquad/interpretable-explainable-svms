@@ -24,6 +24,37 @@ kernel SVM, and tunes model/kernel parameter pairs::
    ])
    predictions = ensemble.predict(X_new)
 
+By default, prediction uses one final SVM tuned on the existing CV splits and
+fitted on the knee-ranked unified feature subset. The cross-validation member
+set remains available explicitly::
+
+   unified_predictions = ensemble.predict(X_new)
+   set_predictions = ensemble.predict(X_new, prediction_mode="set")
+
+The same option applies to ``decision_function``. Supplying ``model_index``
+continues to evaluate one particular member model.
+
+One-class models use sklearn's ``+1`` inlier and ``-1`` outlier convention.
+The dedicated split keeps known outliers out of every training set::
+
+   from sklearn.svm import OneClassSVM
+   from mistic import score_ocsvm
+
+   splits = cvSet(X, y)
+   splits.one_class(num_sets=5)
+   ensemble = svmSet(
+       OneClassSVM(kernel="precomputed"), splits, score_ocsvm().score,
+       kernel=kernelWrapper("rbf"),
+   )
+   ensemble.tune_models([
+       paramSet(model={"nu": 0.1}, kernel={"gamma": 0.1}),
+   ])
+
+``decision_function`` returns positive values for inliers and negative values
+for outliers. One-class feature contributions use the same signed decision
+perturbations as SVC and SVR; objective importance uses the magnitude of the
+frozen-coefficient quadratic dual change.
+
 An optional ensemble-level validation set can be reserved when ``cvSet`` is
 created. These samples are excluded from every later CV train/test split and
 from feature-medoid construction::

@@ -20,20 +20,54 @@ class combined_rank():
         if set_for_rank == "sample":
             np.random.seed(self.random_seed)
             X_for_rank = np.zeros([self.number_samples, svmSet.cv.X.shape[1]])
+            source = svmSet.cv.X
+            if svmSet._is_one_class():
+                source = svmSet.cv.X[svmSet.cv.y == 1]
             for i in range(svmSet.cv.X.shape[1]):
-                X_for_rank[:,i] = np.random.normal(loc = np.mean(svmSet.cv.X[:,i]), 
-                                                   scale = np.std(svmSet.cv.X[:,i]), 
+                X_for_rank[:,i] = np.random.normal(loc = np.mean(source[:,i]),
+                                                   scale = np.std(source[:,i]),
                                                    size = self.number_samples)            
         else:
-            X_for_rank = svmSet.cv.X[getattr(svmSet.cv, set_for_rank)[model_index]]
+            rank_indices = np.asarray(
+                getattr(svmSet.cv, set_for_rank)[model_index], dtype=int)
+            if svmSet._is_one_class():
+                rank_indices = rank_indices[svmSet.cv.y[rank_indices] == 1]
+                if not len(rank_indices):
+                    raise ValueError(
+                        "one-class contribution ranking requires inlier samples")
+            X_for_rank = svmSet.cv.X[rank_indices]
             #X_for_rank = svmSet.cv.X[getattr(svmSet.cv.sets[model_index], set_for_rank)]
 
         feature_contribution = svmSet.decision_perturbation_(model_index, X_for_rank)
-        cummulative_contribution = np.sum((feature_contribution)**2,axis=0)
-        contribution_rank = rank_items(cummulative_contribution)
+        if svmSet._is_one_class():
+            current = np.asarray(svmSet.decision_function(
+                X_for_rank, model_index=model_index), dtype=float)
+            perturbed = current[:, np.newaxis] - feature_contribution
+            current_dispersion = np.var(current)
+            perturbed_dispersion = np.var(perturbed, axis=0)
+            forward = getattr(svmSet, "_selection_direction_", None) == "forward"
+            compression_gain = ((current_dispersion-perturbed_dispersion)
+                                if forward else
+                                (perturbed_dispersion-current_dispersion))
+
+            # Only rank a candidate as eligible when the perturbed model
+            # retains the OneClassSVM coverage target on true-class samples.
+            coverage = np.mean(perturbed >= 0, axis=0)
+            target = 1.0-float(svmSet.models[model_index].nu)
+            eligible = coverage >= target
+            order = np.lexsort((compression_gain, eligible.astype(int)))
+            contribution_rank = np.empty(len(order), dtype=int)
+            contribution_rank[order] = np.arange(len(order))
+        else:
+            cummulative_contribution = np.sum(
+                feature_contribution**2, axis=0)
+            contribution_rank = rank_items(cummulative_contribution)
 
         feature_importance = svmSet.feature_importance_(model_index)
-        feature_rank = rank_items(feature_importance,descending=True)
+        if svmSet._is_one_class():
+            feature_rank = rank_items(feature_importance)
+        else:
+            feature_rank = rank_items(feature_importance,descending=True)
 
         consensus_rank = self.weight*contribution_rank + (1-self.weight)*feature_rank
         rank = rank_items(consensus_rank)
@@ -96,6 +130,49 @@ class score_svc():
         score = self.weight*auc + (1-self.weight)*f1
             
         return {'f1': f1, 'auc': auc, 'score': score}
+
+
+class score_ocsvm():
+    """Score a one-class SVM using sklearn's ``-1``/``+1`` convention.
+
+    With labeled inliers and outliers, ``score`` combines ROC AUC and inlier
+    F1 in the same way :class:`score_svc` does.  A validation set containing
+    only inliers is scored by the fraction retained inside the boundary.
+    """
+
+    def __init__(self, weight=0.5):
+        self.weight = weight
+
+    def score(self, svmSet, model_index):
+        if svmSet.separate_feature_sets | svmSet.separate_parameters:
+            kernel_matrix = svmSet._get_kernel_matrix(
+                svmSet.cv.test[model_index], svmSet.X_ind[model_index],
+                model_index)
+        else:
+            kernel_matrix = svmSet._get_kernel_matrix(
+                svmSet.cv.test[model_index], svmSet.X_ind[model_index])
+
+        y_true = np.asarray(svmSet.cv.y[svmSet.cv.test[model_index]])
+        y_pred = svmSet.models[model_index].predict(kernel_matrix)
+        labels = np.unique(y_true)
+        if not np.all(np.isin(labels, [-1, 1])):
+            raise ValueError("one-class validation labels must be -1 or +1")
+
+        inlier_rate = float(np.mean(y_pred == 1))
+        if labels.size == 1:
+            if labels[0] != 1:
+                raise ValueError(
+                    "one-class validation requires inliers when only one "
+                    "label is present")
+            return {'inlier_rate': inlier_rate, 'f1': inlier_rate,
+                    'auc': np.nan, 'score': inlier_rate}
+
+        decision = svmSet.models[model_index].decision_function(kernel_matrix)
+        auc = roc_auc_score(y_true, decision)
+        f1 = f1_score(y_true, y_pred, pos_label=1)
+        score = self.weight*auc + (1-self.weight)*f1
+        return {'inlier_rate': inlier_rate, 'f1': f1, 'auc': auc,
+                'score': score}
 
 
 class score_svr():

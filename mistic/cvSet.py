@@ -194,6 +194,35 @@ class cvSet():
             self.train.append(train_ind)
             self.test.append(test_ind)
 
+    def one_class(self, num_sets=5, validation_size=0.2, random_seed=0,
+                  inlier_label=1):
+        """Create repeated novelty-detection splits with inlier-only training.
+
+        Labels must use sklearn's convention: ``+1`` for inliers and ``-1``
+        for known outliers. Each test split contains held-out inliers and all
+        development-set outliers; outliers are never included in training.
+        """
+        self._reset_splits()
+        self.type = "one-class"
+        if inlier_label != 1:
+            raise ValueError("OneClassSVM inliers must be labeled +1")
+        labels = np.unique(self.y[self.development_indices_])
+        if not np.all(np.isin(labels, [-1, 1])):
+            raise ValueError("one-class labels must be -1 or +1")
+        inliers = self.development_indices_[
+            self.y[self.development_indices_] == 1]
+        outliers = self.development_indices_[
+            self.y[self.development_indices_] == -1]
+        if len(inliers) < 2:
+            raise ValueError("one-class splitting requires at least two inliers")
+        count = int(np.floor(len(inliers)*validation_size))
+        count = max(1, min(count, len(inliers)-1))
+        rng = np.random.default_rng(random_seed)
+        for _ in range(num_sets):
+            held_out = np.sort(rng.choice(inliers, size=count, replace=False))
+            self.train.append(inliers[~np.isin(inliers, held_out)])
+            self.test.append(np.concatenate((held_out, outliers)))
+
     def independent(self, num_sets = 5, validation_size = 0.2, random_seed = 0):
         self._reset_splits()
         self.type = "independent"
