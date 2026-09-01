@@ -9,6 +9,8 @@ MISTIC documentation
 MISTIC provides feature selection and attribution for ensembles of support
 vector machines trained over reusable cross-validation splits.
 
+This documentation describes MISTIC |release|.
+
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
