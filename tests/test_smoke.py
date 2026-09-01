@@ -5,6 +5,7 @@ import pickle
 
 import numpy as np
 from sklearn.datasets import load_breast_cancer
+from sklearn.metrics import brier_score_loss, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import OneClassSVM, SVC, SVR
 
@@ -178,6 +179,95 @@ def test_tuning_prediction_and_ranking():
     assert predictions.shape == (5,)
     ranks = combined_rank(number_samples=5).compute(ensemble, 0, "train")
     assert sorted(ranks.tolist()) == list(range(ensemble.cv.X.shape[1]))
+
+
+def _fitted_probability_ensemble():
+    X, y = load_breast_cancer(return_X_y=True)
+    X = StandardScaler().fit_transform(X[:150, :6])
+    y = y[:150]
+    splits = cvSet(X, y)
+    splits.classification(num_sets=2, validation_size=0.25, random_seed=7)
+    ensemble = svmSet(
+        SVC(kernel="precomputed", probability=True, random_state=7),
+        splits, score_svc().score, kernel=kernelWrapper("linear"))
+    ensemble.tune_models([paramSet({"C": 1.0}, {})])
+    return ensemble
+
+
+def test_probability_svc_scores_calibrated_curve_and_ranks_sensitivity():
+    ensemble = _fitted_probability_ensemble()
+
+    model_index = 0
+    test = ensemble.cv.test[model_index]
+    kernel = ensemble._get_kernel_matrix(
+        test, ensemble.X_ind[model_index])
+    probability = ensemble.models[model_index].predict_proba(kernel)[:, 1]
+    expected_auc = roc_auc_score(ensemble.cv.y[test], probability)
+    expected_brier = brier_score_loss(
+        ensemble.cv.y[test], probability,
+        pos_label=ensemble.models[model_index].classes_[1])
+    result = ensemble.score(ensemble, model_index)
+    assert result["auc"] == expected_auc
+    assert result["brier"] == expected_brier
+    assert result["calibration"] == 1-expected_brier
+    expected_discrimination = 0.5*result["auc"] + 0.5*result["f1"]
+    assert result["score"] == (
+        0.8*expected_discrimination + 0.2*result["calibration"])
+
+    X_probe = ensemble.cv.X[:8]
+    contribution = ensemble.probability_perturbation_(model_index, X_probe)
+    probability = ensemble.models[model_index].predict_proba(
+        ensemble._inference_kernel(X_probe, model_index))[:, 1]
+    slope = (-ensemble.models[model_index].probA_[0]
+             * probability * (1-probability))
+    np.testing.assert_allclose(
+        contribution,
+        ensemble.decision_perturbation_(model_index, X_probe)
+        * slope[:, np.newaxis])
+
+
+def test_probability_perturbation_requires_probability_enabled_svc():
+    ensemble = _fitted_ensemble()
+    with np.testing.assert_raises_regex(ValueError, "probability=True"):
+        ensemble.probability_perturbation_(0, ensemble.cv.X[:2])
+
+
+def test_probability_svc_calibration_weight_is_validated():
+    for invalid in (-0.1, 1.1):
+        with np.testing.assert_raises(ValueError):
+            score_svc(calibration_weight=invalid)
+
+
+def test_probability_svc_predict_proba_unified_and_set():
+    ensemble = _fitted_probability_ensemble()
+    X = ensemble.cv.X[:7]
+    np.testing.assert_allclose(
+        ensemble.predict_proba(X),
+        ensemble.unified_model_.predict_proba(
+            ensemble._unified_inference_kernel(X)))
+    expected_set = np.mean([
+        model.predict_proba(ensemble._inference_kernel(X, index))
+        for index, model in enumerate(ensemble.models)
+    ], axis=0)
+    np.testing.assert_allclose(
+        ensemble.predict_proba(X, prediction_mode="set"), expected_set)
+    np.testing.assert_allclose(expected_set.sum(axis=1), 1.0)
+
+
+def test_probability_integrated_gradients_satisfy_completeness():
+    ensemble = _fitted_probability_ensemble()
+    X = ensemble.cv.X[:5]
+    reference = np.zeros(X.shape[1])
+    references = np.broadcast_to(reference, X.shape)
+    values = ensemble.integrated_gradient(
+        X, reference_point=reference, num_steps=200, output="probability")
+    expected = (
+        ensemble.predict_proba(X, prediction_mode="set")[:, 1]
+        - ensemble.predict_proba(references, prediction_mode="set")[:, 1]
+    )
+    # libsvm notes that calibrated probabilities may be slightly inconsistent
+    # with its decision values; the chain-rule attribution remains close.
+    np.testing.assert_allclose(values.sum(axis=1), expected, atol=2e-3)
 
 
 def test_optimal_decision_cutoff_maximizes_f1_and_predict_uses_it():

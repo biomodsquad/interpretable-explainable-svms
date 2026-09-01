@@ -2,7 +2,9 @@ import numpy as np
 import pandas as pd
 import copy
 
-from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix, r2_score, root_mean_squared_error
+from sklearn.metrics import (brier_score_loss, confusion_matrix, f1_score,
+                             r2_score, roc_auc_score,
+                             root_mean_squared_error)
 from sklearn.metrics.pairwise import pairwise_kernels
 
 from scipy.stats import pearsonr
@@ -38,7 +40,17 @@ class combined_rank():
             X_for_rank = svmSet.cv.X[rank_indices]
             #X_for_rank = svmSet.cv.X[getattr(svmSet.cv.sets[model_index], set_for_rank)]
 
-        feature_contribution = svmSet.decision_perturbation_(model_index, X_for_rank)
+        model = svmSet.models[model_index]
+        uses_probability = (
+            not svmSet._is_one_class()
+            and bool(getattr(model, "probability", False))
+        )
+        if uses_probability:
+            feature_contribution = svmSet.probability_perturbation_(
+                model_index, X_for_rank)
+        else:
+            feature_contribution = svmSet.decision_perturbation_(
+                model_index, X_for_rank)
         if svmSet._is_one_class():
             current = np.asarray(svmSet.decision_function(
                 X_for_rank, model_index=model_index), dtype=float)
@@ -59,8 +71,15 @@ class combined_rank():
             contribution_rank = np.empty(len(order), dtype=int)
             contribution_rank[order] = np.arange(len(order))
         else:
-            cummulative_contribution = np.sum(
-                feature_contribution**2, axis=0)
+            if uses_probability:
+                # Probability perturbations already express sensitivity on a
+                # bounded, calibrated scale. Accumulate their magnitudes
+                # directly rather than squaring them as decision margins are.
+                cummulative_contribution = np.sum(
+                    np.abs(feature_contribution), axis=0)
+            else:
+                cummulative_contribution = np.sum(
+                    feature_contribution**2, axis=0)
             contribution_rank = rank_items(cummulative_contribution)
 
         feature_importance = svmSet.feature_importance_(model_index)
@@ -93,8 +112,13 @@ class paramSet():
 
 class score_svc():
 
-    def __init__(self, weight=0.5):
+    def __init__(self, weight=0.5, calibration_weight=0.2):
+        if not 0 <= weight <= 1:
+            raise ValueError("weight must be between 0 and 1")
+        if not 0 <= calibration_weight <= 1:
+            raise ValueError("calibration_weight must be between 0 and 1")
         self.weight = weight
+        self.calibration_weight = calibration_weight
 
     def score(self,svmSet,model_index):
         if svmSet.separate_feature_sets | svmSet.separate_parameters:
@@ -124,12 +148,31 @@ class score_svc():
         else:
             f1 = 0
             
-        auc = roc_auc_score(svmSet.cv.y[svmSet.cv.test[model_index]],
-                            svmSet.models[model_index].decision_function(kernel_matrix))
-        
-        score = self.weight*auc + (1-self.weight)*f1
+        model = svmSet.models[model_index]
+        if bool(getattr(model, "probability", False)):
+            # SVC orders probability columns according to ``classes_``.  The
+            # second class is also the positive side of the binary decision
+            # function used by the existing scorer.
+            probability = model.predict_proba(kernel_matrix)[:, 1]
+            curve_score = probability
+            brier = brier_score_loss(
+                svmSet.cv.y[svmSet.cv.test[model_index]], probability,
+                pos_label=model.classes_[1])
+            calibration = 1-brier
+        else:
+            curve_score = model.decision_function(kernel_matrix)
+            brier = np.nan
+            calibration = np.nan
+        auc = roc_auc_score(
+            svmSet.cv.y[svmSet.cv.test[model_index]], curve_score)
+
+        discrimination = self.weight*auc + (1-self.weight)*f1
+        score = ((1-self.calibration_weight)*discrimination
+                 + self.calibration_weight*calibration
+                 if np.isfinite(calibration) else discrimination)
             
-        return {'f1': f1, 'auc': auc, 'score': score}
+        return {'f1': f1, 'auc': auc, 'brier': brier,
+                'calibration': calibration, 'score': score}
 
 
 class score_ocsvm():

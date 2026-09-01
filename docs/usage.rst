@@ -24,6 +24,41 @@ kernel SVM, and tunes model/kernel parameter pairs::
    ])
    predictions = ensemble.predict(X_new)
 
+Set ``probability=True`` on the supplied SVC to use its calibrated Platt
+probability curve during ROC scoring and contribution ranking::
+
+   ensemble = svmSet(
+       SVC(kernel="precomputed", probability=True),
+       splits,
+       score_svc().score,
+       kernel=kernelWrapper("rbf"),
+   )
+
+For probability-enabled SVCs, ``score_svc`` also measures Brier loss and
+includes ``1 - Brier`` in parameter selection. ``calibration_weight`` controls
+its share of the total score; the remaining share retains the configured
+ROC-AUC/F1 blend::
+
+   scorer = score_svc(weight=0.5, calibration_weight=0.2)
+
+Probability-disabled SVCs ignore ``calibration_weight`` and retain the
+original ROC-AUC/F1 score.
+
+For binary SVCs, feature contributions are then measured as the local
+sensitivity of the positive-class probability. Decision-margin contributions
+remain the default when probability estimation is disabled.
+
+Calibrated probabilities follow the same unified/member-set prediction modes::
+
+   probabilities = ensemble.predict_proba(X_new)
+   set_probabilities = ensemble.predict_proba(X_new, prediction_mode="set")
+
+Integrated gradients explain the decision function by default. For a binary
+probability-enabled SVC, they can instead explain positive-class probability::
+
+   probability_attributions = ensemble.integrated_gradient(
+       X_new, reference_point=reference, output="probability")
+
 By default, prediction uses one final SVM tuned on the existing CV splits and
 fitted on the knee-ranked unified feature subset. The cross-validation member
 set remains available explicitly::

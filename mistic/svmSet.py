@@ -8,7 +8,7 @@ import copy
 from collections import Counter
 
 from sklearn.svm import OneClassSVM, SVR
-from sklearn.metrics import f1_score, roc_auc_score, r2_score
+from sklearn.metrics import brier_score_loss, f1_score, roc_auc_score, r2_score
 from sklearn.base import clone
 from scipy.stats import pearsonr
 
@@ -369,9 +369,21 @@ class svmSet():
             return float(np.mean(predictions == y_true))
         positive = classes[1]
         f1 = f1_score(y_true, predictions, pos_label=positive)
-        auc = roc_auc_score(y_true, model.decision_function(kernel_matrix))
-        weight = getattr(getattr(self.score, "__self__", None), "weight", 0.5)
-        return weight * auc + (1-weight) * f1
+        scorer = getattr(self.score, "__self__", None)
+        weight = getattr(scorer, "weight", 0.5)
+        if bool(getattr(model, "probability", False)):
+            probability = model.predict_proba(kernel_matrix)[:, 1]
+            auc = roc_auc_score(y_true, probability)
+            calibration = 1-brier_score_loss(
+                y_true, probability, pos_label=positive)
+            calibration_weight = getattr(scorer, "calibration_weight", 0.2)
+        else:
+            auc = roc_auc_score(y_true, model.decision_function(kernel_matrix))
+            calibration = 0.0
+            calibration_weight = 0.0
+        discrimination = weight * auc + (1-weight) * f1
+        return ((1-calibration_weight)*discrimination
+                + calibration_weight*calibration)
 
 
     def fit_unified_model(self, parameter_grid):
@@ -2143,16 +2155,31 @@ class svmSet():
 
     
     def probability_perturbation_(self, model_index, X):
-        probability = self.models[model_index].predict_proba(X)
-        decision = self.models[model_index].decision_function(X)
-        
-        constant = -self.models[model_index].probA_*np.exp(self.models[model_index].probA_*decision \
-                                                           + self.models[model_index].probB_)*probability**2
-        
-        decision_perturbation = self.decision_perturbation(model_index,X)
-        probability_perturbation = decision_perturbation*constant
-    
-        return probability_perturbation
+        """Approximate feature effects on calibrated positive probability.
+
+        The SVC Platt curve is differentiated at each sample and multiplied
+        by the exact frozen-model decision perturbation.  Returned columns
+        correspond to the same perturbation sets as
+        :meth:`decision_perturbation_`.
+        """
+        model = self.models[model_index]
+        if self._is_one_class() or isinstance(self.SVM, SVR):
+            raise TypeError("probability perturbations require an SVC")
+        if not bool(getattr(model, "probability", False)):
+            raise ValueError(
+                "probability perturbations require SVC(probability=True)")
+        if np.asarray(model.classes_).size != 2:
+            raise ValueError(
+                "probability perturbations currently require binary SVC")
+
+        kernel_matrix = self._inference_kernel(X, model_index)
+        probability = model.predict_proba(kernel_matrix)[:, 1]
+        # For binary SVC, P(class_1 | f) = 1 / (1 + exp(A*f + B)).
+        # Expressing the derivative as p*(1-p) is stable and avoids the
+        # unnecessary squared-probability form previously used here.
+        slope = -float(np.ravel(model.probA_)[0]) * probability * (1-probability)
+        decision_perturbation = self.decision_perturbation_(model_index, X)
+        return decision_perturbation * slope[:, np.newaxis]
 
     
     def decision_perturbation_(self,model_index,X):
@@ -2228,6 +2255,23 @@ class svmSet():
 
         return decision_gradient
 
+
+    def probability_gradient_(self, model_index, X):
+        """Return gradients of binary SVC positive-class probability."""
+        model = self.models[model_index]
+        if self._is_one_class() or isinstance(self.SVM, SVR):
+            raise TypeError("probability gradients require an SVC")
+        if not bool(getattr(model, "probability", False)):
+            raise ValueError("probability gradients require SVC(probability=True)")
+        if np.asarray(model.classes_).size != 2:
+            raise ValueError("probability gradients currently require binary SVC")
+
+        probability = model.predict_proba(
+            self._inference_kernel(X, model_index))[:, 1]
+        slope = (-float(np.ravel(model.probA_)[0])
+                 * probability * (1-probability))
+        return self.decision_gradient_(model_index, X) * slope[:, np.newaxis]
+
     
     def _find_boundary_points(self, model_index, X):
         boundary_points = np.zeros([len(X), self.cv.X.shape[1]])
@@ -2239,13 +2283,19 @@ class svmSet():
 
     
     def integrated_gradient(self, X, model_index = None, num_steps = 20,
-                            reference_point = None, ref_point = None):
+                            reference_point = None, ref_point = None,
+                            output="decision"):
         """Calculate integrated gradients from supplied or inferred references.
 
         When ``model_index`` is omitted, the result is the mean attribution
         across all models.  For separate feature sets, its columns correspond
         to the sorted union of the models' feature indices; a model contributes
         zero for every feature it does not use.
+
+        Set ``output='probability'`` to explain the calibrated positive-class
+        probability of a binary ``SVC(probability=True)``. The default
+        ``output='decision'`` retains decision-function (or SVR prediction)
+        attributions.
 
         ``reference_point`` may be one feature vector shared by every sample,
         or an array with one reference vector per row of ``X``. Supplying it
@@ -2254,6 +2304,17 @@ class svmSet():
         """
         if reference_point is not None and ref_point is not None:
             raise ValueError("specify only reference_point, not both aliases")
+        if output not in {"decision", "probability"}:
+            raise ValueError("output must be 'decision' or 'probability'")
+        if output == "probability":
+            model = self.models[0] if model_index is None else self.models[model_index]
+            if (self._is_one_class() or isinstance(self.SVM, SVR) or
+                    not bool(getattr(model, "probability", False))):
+                raise ValueError(
+                    "output='probability' requires SVC(probability=True)")
+            if np.asarray(model.classes_).size != 2:
+                raise ValueError(
+                    "probability integrated gradients currently require binary SVC")
         if reference_point is None:
             reference_point = ref_point
 
@@ -2314,7 +2375,9 @@ class svmSet():
                 path_fraction = np.linspace(0, 1, num_steps)[:, np.newaxis]
                 x_steps = x_start + path_fraction*x_diff
 
-                gradient_steps = self.decision_gradient_(m,x_steps)
+                gradient_steps = (self.probability_gradient_(m, x_steps)
+                                  if output == "probability" else
+                                  self.decision_gradient_(m, x_steps))
                 # Standard integrated gradients attribute the change from the
                 # reference output, not the absolute output.  Consequently no
                 # reference prediction is distributed across features, and an
@@ -2332,12 +2395,14 @@ class svmSet():
 
     def explain_integrated_gradients(self, X, feature_names=None, target=None,
                                      model_index=None, num_steps=20,
-                                     reference_point=None, ref_point=None):
+                                     reference_point=None, ref_point=None,
+                                     output="decision"):
         """Return integrated gradients together with plotting metadata."""
         X = np.asarray(X)
         values = self.integrated_gradient(
             X, model_index=model_index, num_steps=num_steps,
-            reference_point=reference_point, ref_point=ref_point)
+            reference_point=reference_point, ref_point=ref_point,
+            output=output)
         if self.separate_feature_sets:
             if model_index is None:
                 self._update_unified_feature_attributes()
@@ -2520,6 +2585,43 @@ class svmSet():
                     (decision_values > cutoff) + 0]
 
         return predictions
+
+
+    def predict_proba(self, X, model_index=None, prediction_mode="unified"):
+        """Return SVC class probabilities from the unified model or member set.
+
+        Set-based probabilities are the arithmetic mean of member-model
+        probabilities, with columns ordered according to ``classes_``.
+        """
+        if prediction_mode not in {"unified", "set"}:
+            raise ValueError("prediction_mode must be 'unified' or 'set'")
+        if self._is_one_class() or isinstance(self.SVM, SVR):
+            raise TypeError("predict_proba is available only for SVC")
+
+        reference_model = (self.unified_model_ if model_index is None and
+                           prediction_mode == "unified" and
+                           self.unified_model_ is not None else
+                           self.models[0 if model_index is None else model_index])
+        if not bool(getattr(reference_model, "probability", False)):
+            raise ValueError("predict_proba requires SVC(probability=True)")
+
+        if model_index is None and prediction_mode == "unified":
+            if self.unified_model_ is not None:
+                return self.unified_model_.predict_proba(
+                    self._unified_inference_kernel(X))
+            prediction_mode = "set"
+
+        model_indices = (range(self.num_models) if model_index is None
+                         else [model_index])
+        classes = np.asarray(reference_model.classes_)
+        probabilities = np.zeros((len(X), len(classes)), dtype=float)
+        for m in model_indices:
+            model = self.models[m]
+            member = model.predict_proba(self._inference_kernel(X, m))
+            positions = [int(np.flatnonzero(classes == label)[0])
+                         for label in model.classes_]
+            probabilities[:, positions] += member
+        return probabilities / (self.num_models if model_index is None else 1)
         
 
     def _set_decision_function(self, X, model_index=None):
