@@ -1,0 +1,7 @@
+seed,method,selection_strategy,refinement_steps,update_all_models,refinement_objective,num_models,knee_feature_count,num_unified_features,signal_recall,noise_fraction,member_disagreement,accepted_moves,roc_auc,f1,balanced_accuracy,accuracy
+0,MiSTIC SVM set,forward_knee,200,True,ensemble_validation,5,14,39,0.6,0.4,0.1792,69.0,0.945135,0.864865,0.877847,0.88
+0,sklearn on knee-ranked unified features,forward_knee,200,True,ensemble_validation,5,14,14,0.5,0.285714,0.0,,0.942805,0.844828,0.85779,0.856
+1,MiSTIC SVM set,forward_knee,200,True,ensemble_validation,5,13,61,0.45,0.55,0.224,79.0,0.932971,0.776699,0.806418,0.816
+1,sklearn on knee-ranked unified features,forward_knee,200,True,ensemble_validation,5,13,13,0.35,0.461538,0.0,,0.880176,0.793103,0.809265,0.808
+2,MiSTIC SVM set,forward_knee,200,True,ensemble_validation,5,5,29,0.65,0.35,0.2672,65.0,0.932712,0.857143,0.8706,0.872
+2,sklearn on knee-ranked unified features,forward_knee,200,True,ensemble_validation,5,5,5,0.25,0.0,0.0,,0.885611,0.761905,0.769151,0.76

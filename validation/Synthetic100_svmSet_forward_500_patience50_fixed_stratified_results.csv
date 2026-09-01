@@ -1,0 +1,7 @@
+seed,method,selection_strategy,refinement_steps,update_all_models,refinement_objective,num_models,knee_feature_count,num_unified_features,signal_recall,noise_fraction,member_disagreement,accepted_moves,roc_auc,f1,balanced_accuracy,accuracy,iterations_run,converged,stop_reason
+0,MiSTIC SVM set,forward_knee,500,True,ensemble_validation,5,19,53,0.7,0.30000000000000004,0.24160000000000004,80.0,0.9060559006211181,0.7966101694915254,0.8109472049689441,0.808,107,True,converged
+0,sklearn on knee-ranked unified features,forward_knee,500,True,ensemble_validation,5,19,19,0.7,0.26315789473684215,0.0,,0.9521221532091098,0.9043478260869565,0.9135610766045549,0.912,107,True,converged
+1,MiSTIC SVM set,forward_knee,500,True,ensemble_validation,5,12,36,0.7,0.30000000000000004,0.1856,55.0,0.9360766045548654,0.8545454545454545,0.8689182194616978,0.872,63,True,converged
+1,sklearn on knee-ranked unified features,forward_knee,500,True,ensemble_validation,5,12,12,0.5,0.16666666666666663,0.0,,0.9653209109730849,0.8947368421052632,0.9046325051759834,0.904,63,True,converged
+2,MiSTIC SVM set,forward_knee,500,True,ensemble_validation,5,17,65,0.55,0.44999999999999996,0.25120000000000003,69.0,0.8923395445134575,0.8103448275862069,0.8254399585921326,0.824,180,True,converged
+2,sklearn on knee-ranked unified features,forward_knee,500,True,ensemble_validation,5,17,17,0.5,0.4117647058823529,0.0,,0.944616977225673,0.8,0.8242753623188406,0.832,180,True,converged

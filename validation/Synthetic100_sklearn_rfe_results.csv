@@ -1,0 +1,4 @@
+seed,method,selection_strategy,num_models,num_unified_features,signal_recall,noise_fraction,member_disagreement,roc_auc,f1,balanced_accuracy,accuracy
+0,sklearn SVM + RFE,RFE,1,20,0.4,0.6,0.0,0.8752587991718427,0.7874015748031497,0.7942546583850931,0.784
+1,sklearn SVM + RFE,RFE,1,20,0.4,0.6,0.0,0.8941511387163561,0.7741935483870968,0.7836438923395446,0.776
+2,sklearn SVM + RFE,RFE,1,20,0.4,0.6,0.0,0.8941511387163561,0.7741935483870968,0.7836438923395446,0.776

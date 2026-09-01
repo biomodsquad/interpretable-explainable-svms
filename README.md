@@ -28,6 +28,9 @@ python -m pip install -e ".[dev]"
 The package requires Python 3.10 or newer. Example classification and
 regression workflows are available in `mistic/examples`.
 
+Synthetic-data validation studies and their generated results are kept in
+`validation` so they remain separate from the user-facing examples.
+
 ## Documentation and tests
 
 Build the API documentation with `sphinx-build -W docs docs/_build/html` and

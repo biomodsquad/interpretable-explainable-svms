@@ -1,0 +1,4 @@
+seed,method,num_features,roc_auc,f1,balanced_accuracy,accuracy,best_C,best_gamma,cv_best_score,best_mean_train_score
+0,"Oracle sklearn SVM on all 20 known signal features, expanded grid",20,0.9699792960662527,0.9107142857142857,0.9191252587991718,0.92,64.0,0.0078125,0.9627828993851566,0.9868646551145916
+1,"Oracle sklearn SVM on all 20 known signal features, expanded grid",20,0.9655797101449275,0.9464285714285714,0.9514751552795031,0.952,1.0,0.125,0.947289880472165,0.997141697097247
+2,"Oracle sklearn SVM on all 20 known signal features, expanded grid",20,0.9699792960662527,0.9107142857142857,0.9191252587991718,0.92,64.0,0.0078125,0.9585769907247336,0.9853163607481616
