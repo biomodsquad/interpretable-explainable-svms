@@ -27,7 +27,7 @@ from mistic import (
     score_svr,
     svmSet,
 )
-from mistic.utility import combined_rank, rank_items
+from mistic.utility import combined_rank, dotdict, rank_items
 
 
 def test_documentation_version_and_public_api_are_synchronized():
@@ -43,6 +43,14 @@ def test_documentation_version_and_public_api_are_synchronized():
 
     api_reference = (repository_root / "docs" / "api.rst").read_text()
     assert all(f"mistic.{name}" in api_reference for name in mistic.__all__)
+
+
+def test_dotdict_missing_attributes_follow_python_lookup_protocol():
+    """Allow pickle and introspection to probe absent special methods."""
+    values = dotdict({"score": 1.0})
+    assert values.score == 1.0
+    with np.testing.assert_raises(AttributeError):
+        _ = values.__setstate__
 
 
 def _fitted_ensemble():

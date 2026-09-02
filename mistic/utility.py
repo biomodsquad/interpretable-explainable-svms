@@ -148,7 +148,29 @@ class dotdict(dict):
         Dictionary keys are exposed dynamically as attributes.
     """
 
-    __getattr__ = dict.get
+    def __getattr__(self, name):
+        """Return a keyed value or raise the standard attribute error.
+
+        Parameters
+        ----------
+        name : str
+            Dictionary key requested through attribute syntax.
+
+        Returns
+        -------
+        object
+            Value stored under ``name``.
+
+        Raises
+        ------
+        AttributeError
+            If the mapping does not contain ``name``.
+        """
+        try:
+            return self[name]
+        except KeyError as error:
+            raise AttributeError(name) from error
+
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
 
