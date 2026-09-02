@@ -54,3 +54,10 @@ Data files
 ``boston-housing_train.csv`` supports the regression example. The datasets are
 included for reproducibility; review their provenance and suitability before
 using them beyond these demonstrations.
+
+Synthetic model comparison
+--------------------------
+
+The :doc:`../tutorials/synthetic_benchmark` tutorial provides a reproducible
+known-signal comparison between MISTIC, a plain RBF SVC, linear-SVM RFE followed
+by an RBF SVC, random forests, and histogram gradient-boosted trees.

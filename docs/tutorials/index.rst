@@ -15,6 +15,7 @@ distributed with the package.
    explanations
    visualization
    blind_predictions
+   synthetic_benchmark
 
 Suggested paths
 ---------------
