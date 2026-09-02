@@ -81,6 +81,9 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# Local research notebooks (not part of the distribution)
+/experimentation/
+
 # IPython
 profile_default/
 ipython_config.py

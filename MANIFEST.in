@@ -1,0 +1,6 @@
+# Ship the curated examples and their input datasets.
+recursive-include mistic/examples *.ipynb *.csv *.data
+
+# Keep research and validation artifacts out of source distributions.
+prune experimentation
+prune validation

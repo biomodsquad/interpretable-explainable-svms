@@ -42,6 +42,9 @@ class svmSet:
         Whether each member selects its own model and kernel parameters.
     perturbation_sets : sequence of sequences of int or None, default=None
         Feature groups added, removed, and perturbed as indivisible units.
+    perturbation_normalization : {"per_feature", "sqrt", "none"}, default="per_feature"
+        Group-size normalization applied to importance and decision
+        perturbations before ranking.
 
     Attributes
     ----------
@@ -69,6 +72,8 @@ class svmSet:
         Calibrated binary classification threshold.
     perturbation_sets : list of list of int
         Normalized feature groups used by selection and explanation methods.
+    perturbation_normalization : {"per_feature", "sqrt", "none"}
+        Divisor applied to grouped perturbation measures.
     """
 
     def _is_one_class(self):
@@ -90,6 +95,7 @@ class svmSet:
         separate_feature_sets=False,
         separate_parameters=False,
         perturbation_sets=None,
+        perturbation_normalization="per_feature",
     ):
         """Initialize estimators, feature sets, kernels, splits, and scoring.
 
@@ -125,6 +131,11 @@ class svmSet:
             self.perturbation_sets = self._normalize_perturbation_sets(
                 perturbation_sets, all_features
             )
+        if perturbation_normalization not in {"per_feature", "sqrt", "none"}:
+            raise ValueError(
+                "perturbation_normalization must be 'per_feature', 'sqrt', or 'none'"
+            )
+        self.perturbation_normalization = perturbation_normalization
 
         self.kernel = kernelWrapper() if kernel is None else kernel
         self._reset_kernel_matrix()
@@ -173,6 +184,9 @@ class svmSet:
             self._kernel_configuration_ = None
         if "perturbation_sets" not in self.__dict__:
             self.perturbation_sets = [[feature] for feature in range(self.cv.X.shape[1])]
+        if "perturbation_normalization" not in self.__dict__:
+            # Preserve the raw total-group behavior of older serialized models.
+            self.perturbation_normalization = "none"
         if "decision_value_cutoff_" not in self.__dict__:
             self.decision_value_cutoff_ = 0.0
         if "unified_model_" not in self.__dict__:
@@ -2688,6 +2702,15 @@ class svmSet:
             if not active_features.intersection(group)
         ]
 
+    def _perturbation_scale(self, perturbation_set):
+        """Return the group-size divisor for perturbation measurements."""
+        set_size = len(perturbation_set)
+        if self.perturbation_normalization == "per_feature":
+            return float(set_size)
+        if self.perturbation_normalization == "sqrt":
+            return float(np.sqrt(set_size))
+        return 1.0
+
     def feature_importance_(self, model_index):
         """Measure the effect of removing one or more feature groups.
 
@@ -2751,10 +2774,16 @@ class svmSet:
                 # Frozen-coefficient change in 1/2 ||w||^2.  Its magnitude is
                 # used because non-additive kernels need not give the change
                 # a consistent sign when a feature group is removed/added.
-                criteria[z] = abs(0.5 * dual_coef @ (K - Kp) @ dual_coef)
+                criteria[z] = (
+                    abs(0.5 * dual_coef @ (K - Kp) @ dual_coef)
+                    / self._perturbation_scale(perturbation_set)
+                )
             else:
-                # Preserve the established SVC/SVR criterion exactly.
-                criteria[z] = np.sum(const * (K - Kp))
+                # Normalize the established SVC/SVR frozen-objective criterion.
+                criteria[z] = (
+                    np.sum(const * (K - Kp))
+                    / self._perturbation_scale(perturbation_set)
+                )
 
         return criteria
 
@@ -2851,7 +2880,7 @@ class svmSet:
             # tiled coefficient matrix and an equally large product array.
             decision_perturbation[:, z] = np.matmul(
                 self.models[model_index].dual_coef_[0, :], K - Kp
-            )
+            ) / self._perturbation_scale(perturbation_set)
 
         return decision_perturbation
 

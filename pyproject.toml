@@ -51,7 +51,13 @@ Issues = "https://github.com/biomodsquad/interpretable-explainable-svms/issues"
 
 [tool.setuptools.packages.find]
 include = ["mistic*"]
-exclude = ["mistic.examples*"]
+
+[tool.setuptools.package-data]
+mistic = [
+  "examples/*.ipynb",
+  "examples/*.csv",
+  "examples/*.data",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -62,6 +68,7 @@ line-length = 100
 extend-exclude = [
   "build",
   "dist",
+  "experimentation",
   "mistic/examples",
   "mistic/validation",
   "mistic/svmSet_bkp.py",
