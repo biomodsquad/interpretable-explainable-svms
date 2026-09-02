@@ -5,6 +5,7 @@ import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.integrate import trapezoid
 from scipy.optimize import minimize
 from scipy.stats import pearsonr
 from sklearn.base import clone
@@ -539,7 +540,7 @@ class svmSet:
         f1 = f1_score(y_true, predictions, pos_label=positive)
         scorer = getattr(self.score, "__self__", None)
         weight = getattr(scorer, "weight", 0.5)
-        if bool(getattr(model, "probability", False)):
+        if getattr(model, "probability", False) is True:
             probability = model.predict_proba(kernel_matrix)[:, 1]
             auc = roc_auc_score(y_true, probability)
             calibration = 1 - brier_score_loss(y_true, probability, pos_label=positive)
@@ -2781,7 +2782,7 @@ class svmSet:
         model = self.models[model_index]
         if self._is_one_class() or isinstance(self.SVM, SVR):
             raise TypeError("probability perturbations require an SVC")
-        if not bool(getattr(model, "probability", False)):
+        if getattr(model, "probability", False) is not True:
             raise ValueError("probability perturbations require SVC(probability=True)")
         if np.asarray(model.classes_).size != 2:
             raise ValueError("probability perturbations currently require binary SVC")
@@ -2912,7 +2913,7 @@ class svmSet:
         model = self.models[model_index]
         if self._is_one_class() or isinstance(self.SVM, SVR):
             raise TypeError("probability gradients require an SVC")
-        if not bool(getattr(model, "probability", False)):
+        if getattr(model, "probability", False) is not True:
             raise ValueError("probability gradients require SVC(probability=True)")
         if np.asarray(model.classes_).size != 2:
             raise ValueError("probability gradients currently require binary SVC")
@@ -2999,7 +3000,7 @@ class svmSet:
             if (
                 self._is_one_class()
                 or isinstance(self.SVM, SVR)
-                or not bool(getattr(model, "probability", False))
+                or getattr(model, "probability", False) is not True
             ):
                 raise ValueError("output='probability' requires SVC(probability=True)")
             if np.asarray(model.classes_).size != 2:
@@ -3075,7 +3076,7 @@ class svmSet:
                 # decision function.
                 model_gradient = x_diff[model_features] * np.asarray(
                     [
-                        np.trapz(gradient_steps[:, n], x=path_fraction[:, 0])
+                        trapezoid(gradient_steps[:, n], x=path_fraction[:, 0])
                         for n in range(gradient_steps.shape[1])
                     ]
                 )
@@ -3372,7 +3373,7 @@ class svmSet:
             and self.unified_model_ is not None
             else self.models[0 if model_index is None else model_index]
         )
-        if not bool(getattr(reference_model, "probability", False)):
+        if getattr(reference_model, "probability", False) is not True:
             raise ValueError("predict_proba requires SVC(probability=True)")
 
         if model_index is None and prediction_mode == "unified":
@@ -3468,7 +3469,7 @@ class svmSet:
                 )
                 x, y = zip(*points)
 
-                area = np.trapz(y, x)
+                area = trapezoid(y, x)
                 enrichment_score = -area / max(x)
 
             case "max":

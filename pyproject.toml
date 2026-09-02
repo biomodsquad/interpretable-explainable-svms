@@ -40,6 +40,7 @@ dev = [
   "pytest>=8",
   "ruff>=0.6",
   "sphinx>=7",
+  "tomli>=2; python_version < '3.11'",
   "twine>=5",
 ]
 

@@ -88,7 +88,9 @@ class combined_rank:
             # X_for_rank = svmSet.cv.X[getattr(svmSet.cv.sets[model_index], set_for_rank)]
 
         model = svmSet.models[model_index]
-        uses_probability = not svmSet._is_one_class() and bool(getattr(model, "probability", False))
+        uses_probability = (
+            not svmSet._is_one_class() and getattr(model, "probability", False) is True
+        )
         if uses_probability:
             feature_contribution = svmSet.probability_perturbation_(model_index, X_for_rank)
         else:
@@ -277,7 +279,7 @@ class score_svc:
             f1 = 0
 
         model = svmSet.models[model_index]
-        if bool(getattr(model, "probability", False)):
+        if getattr(model, "probability", False) is True:
             # SVC orders probability columns according to ``classes_``.  The
             # second class is also the positive side of the binary decision
             # function used by the existing scorer.

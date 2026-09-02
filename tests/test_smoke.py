@@ -6,11 +6,15 @@ import runpy
 from pathlib import Path
 
 import numpy as np
-import tomllib
 from sklearn.datasets import load_breast_cancer
 from sklearn.metrics import brier_score_loss, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR, OneClassSVM
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised in Python 3.10 CI
+    import tomli as tomllib
 
 import mistic
 from mistic import (
