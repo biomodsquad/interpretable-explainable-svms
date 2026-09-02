@@ -64,6 +64,31 @@ Integrated gradients accumulate local gradients along a straight path from a
 reference point to an observation. The attributions approximately sum to the
 output difference between the observation and reference.
 
+For a differentiable model output :math:`F`, input :math:`\mathbf{x}`, and
+reference :math:`\mathbf{x}'`, the attribution to feature :math:`j` is
+[#integratedgradients]_
+
+.. math::
+
+   \operatorname{IG}_j(\mathbf{x};\mathbf{x}')=
+   (x_j-x_j')\int_0^1
+   \frac{\partial F\!\left(\mathbf{x}'+
+   \alpha(\mathbf{x}-\mathbf{x}')\right)}{\partial x_j}\,d\alpha.
+
+The scalar :math:`\alpha` traces the straight path from the reference at zero
+to the observation at one. Under the usual differentiability conditions, the
+attributions satisfy the **completeness** property
+
+.. math::
+
+   \sum_{j=1}^{p}\operatorname{IG}_j(\mathbf{x};\mathbf{x}')
+   =F(\mathbf{x})-F(\mathbf{x}').
+
+MISTIC approximates each integral numerically with the configured
+``num_steps``. The completeness residual is therefore a useful convergence
+check: increase ``num_steps`` if the attribution sum is not sufficiently close
+to the observed output difference.
+
 .. code-block:: python
 
    import numpy as np
@@ -94,3 +119,10 @@ anchors, perturbations to test discrete removal, and integrated gradients to
 allocate local output differences. When they disagree, investigate feature
 correlation, interactions, saturation, and reference choice rather than
 averaging the methods into one unexplained number.
+
+Reference
+---------
+
+.. [#integratedgradients] Sundararajan, Taly, and Yan, `Axiomatic attribution
+   for deep networks <https://proceedings.mlr.press/v70/sundararajan17a.html>`_,
+   *Proceedings of Machine Learning Research* 70, 3319–3328 (2017).
