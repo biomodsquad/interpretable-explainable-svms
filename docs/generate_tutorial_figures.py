@@ -158,6 +158,17 @@ def benchmark_results():
     combined = pd.concat((svm_results, tree_results), ignore_index=True)
     combined = combined[combined["method"].isin(labels)].copy()
     combined["display_method"] = combined["method"].map(labels)
+    combined["comparison_feature_count"] = combined["num_features"]
+
+    # The original validation table stored MISTIC's mean per-member count in
+    # ``num_features``. Its recovery statistics were calculated from the full
+    # unified set (all sets contained fewer than the top-20 reporting cap), so
+    # recovered-signal count divided by precision gives its true cardinality.
+    mistic_rows = combined["display_method"].eq("MISTIC")
+    recovered_signal_count = combined.loc[mistic_rows, "signal_recall"] * 20
+    combined.loc[mistic_rows, "comparison_feature_count"] = np.rint(
+        recovered_signal_count / combined.loc[mistic_rows, "signal_precision"]
+    )
     return combined, list(labels.values())
 
 
@@ -208,7 +219,8 @@ def save_benchmark_figures():
             signal_precision=("signal_precision", "mean"),
             roc_auc=("roc_auc", "mean"),
             roc_auc_sd=("roc_auc", "std"),
-            num_features=("num_features", "mean"),
+            feature_count=("comparison_feature_count", "mean"),
+            feature_count_sd=("comparison_feature_count", "std"),
         )
         .reindex(order)
     )
@@ -237,8 +249,9 @@ def save_benchmark_figures():
 
     for method in order:
         axes[1].errorbar(
-            summary.loc[method, "num_features"],
+            summary.loc[method, "feature_count"],
             summary.loc[method, "roc_auc"],
+            xerr=summary.loc[method, "feature_count_sd"],
             yerr=summary.loc[method, "roc_auc_sd"],
             color=colors[method],
             marker="o",
@@ -247,7 +260,7 @@ def save_benchmark_figures():
             linestyle="none",
             label=method,
         )
-    axes[1].set_xlabel("Features used by the predictive model")
+    axes[1].set_xlabel("Unified or model feature count (mean ± SD)")
     axes[1].set_ylabel("Blind ROC AUC (mean ± SD)")
     axes[1].set_title("Performance versus model size")
     axes[1].grid(alpha=0.25)

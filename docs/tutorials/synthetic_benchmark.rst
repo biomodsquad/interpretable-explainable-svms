@@ -338,8 +338,10 @@ populations.
    top 20 development-set permutation ranks, SVM-RFE uses its 20 selected
    variables, and MISTIC uses the unified ranking recorded by the validation
    study. Right: blind ROC AUC versus the number of features used by each
-   predictive model; the MISTIC point uses the mean number of features in its
-   member models.
+   predictive model. The MISTIC point uses the complete unified feature-list
+   count for each seed (mean 16.1), not the smaller per-member or per-fold
+   feature count. Horizontal error bars show feature-count variation across
+   seeds where applicable.
 
 Do not collapse the comparison to one number. Read the columns together:
 
