@@ -43,8 +43,8 @@ Core objects
    hyperparameters.
 
 ``combined_rank``
-   Blends two views of relevance: the change in the frozen SVM objective and
-   the change in sample outputs after a feature or feature group is perturbed.
+   Blends two views of relevance: a frozen kernel-objective criterion and the
+   change in sample outputs after a feature or feature group is perturbed.
 
 Model members and the unified model
 -----------------------------------

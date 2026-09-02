@@ -14,8 +14,9 @@ MISTIC recomputes the kernel after removing a feature group while keeping the
 fitted dual coefficients fixed. This isolates two related changes:
 
 ``feature_importance_``
-   The change in the frozen SVM objective. It summarizes the group's role in
-   the fitted model geometry.
+   A frozen kernel-objective criterion. One-class models use the exact
+   quadratic change; SVC and SVR use MISTIC's legacy kernel-mass proxy. See
+   :doc:`ranking` for both derivations.
 
 ``decision_perturbation_``
    The signed change in decision output for each sample. It preserves local

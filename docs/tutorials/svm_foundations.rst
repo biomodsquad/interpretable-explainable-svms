@@ -1,99 +1,231 @@
 Support vector machine foundations
 ==================================
 
-An SVM learns a boundary whose position is controlled by a subset of training
-observations called **support vectors**. The decision function is expressed in
-terms of similarities between a new observation and those support vectors.
-Kernel functions make nonlinear boundaries possible without explicitly
-constructing every transformed feature.
+Support vector machines construct a decision rule from a subset of training
+observations called **support vectors**. This chapter derives the linear
+maximum-margin classifier, introduces the kernel representation, and then gives
+the primal, dual, and decision functions for the three model families supported
+by MISTIC.
 
-Classification
---------------
+From a separating plane to maximum margin
+-----------------------------------------
 
-A support vector classifier separates classes while balancing a wide margin
-against training violations. ``C`` controls that tradeoff: large values
-penalize violations more strongly; small values permit a softer margin.
+For binary labels :math:`y_i\in\{-1,+1\}`, a linear classifier uses
 
-.. code-block:: python
+.. math::
 
-   from sklearn.svm import SVC
+   f(\mathbf{x}) = \mathbf{w}^{\mathsf T}\mathbf{x}+b,
+   \qquad \widehat y = \operatorname{sign}(f(\mathbf{x})).
 
-   classifier = SVC(
-       kernel="precomputed",
-       C=2.0,
-       class_weight="balanced",
-       probability=True,
-   )
+Multiplying :math:`(\mathbf{w},b)` by a positive constant does not change the
+plane :math:`f(\mathbf{x})=0`. We therefore choose a canonical scaling in which
+the nearest observations obey
+:math:`y_i(\mathbf{w}^{\mathsf T}\mathbf{x}_i+b)=1`. The two supporting planes
+are :math:`f(\mathbf{x})=+1` and :math:`f(\mathbf{x})=-1`. Their perpendicular
+distance is :math:`2/\lVert\mathbf{w}\rVert`, so maximizing the margin is
+equivalent to minimizing :math:`\frac12\lVert\mathbf{w}\rVert^2`.
 
-The signed decision value measures position relative to the boundary. For a
-binary classifier, positive and negative signs correspond to the order in
-``model.classes_``. A predicted probability is a calibrated transformation of
-that score; it is useful for ranking risk but should be checked for calibration.
+.. raw:: html
 
-MISTIC's ``score_svc`` combines ROC AUC and F1. For probability-enabled SVCs it
-can also reward calibration through ``1 - Brier loss``:
+   <div class="svm-schematic" role="img" aria-label="Two classes separated by a maximum-margin hyperplane. Dashed parallel lines mark the margins and gold rings identify support vectors.">
+     <div class="margin left"></div><div class="hyperplane"></div><div class="margin right"></div>
+     <span class="label boundary-label">decision boundary f(x) = 0</span>
+     <span class="label margin-label">margin width 2 / ||w||</span>
+     <span class="label negative-label">class −1</span><span class="label positive-label">class +1</span>
+     <i class="point negative" style="left:10%;top:24%"></i><i class="point negative" style="left:18%;top:48%"></i>
+     <i class="point negative" style="left:28%;top:18%"></i><i class="point negative support" style="left:36%;top:55%"></i>
+     <i class="point negative" style="left:23%;top:76%"></i><i class="point positive support" style="left:55%;top:35%"></i>
+     <i class="point positive" style="left:68%;top:22%"></i><i class="point positive" style="left:73%;top:55%"></i>
+     <i class="point positive" style="left:84%;top:72%"></i><i class="point positive" style="left:79%;top:35%"></i>
+   </div>
+   <p class="schematic-caption">Gold rings mark support vectors: the observations that constrain the margin. Non-support vectors do not appear in the final kernel expansion.</p>
 
-.. code-block:: python
+Perfect separation is often impossible. Slack variables
+:math:`\xi_i\geq 0` permit margin violations, and :math:`C` controls their
+penalty. This gives the soft-margin primal problem [#cortes]_:
 
-   from mistic import score_svc
+.. math::
 
-   scorer = score_svc(weight=0.5, calibration_weight=0.2)
+   \min_{\mathbf{w},b,\boldsymbol\xi}
+   \frac12\lVert\mathbf{w}\rVert^2+C\sum_{i=1}^{n}\xi_i
 
-Regression
-----------
+.. math::
 
-Support vector regression fits a function with an ``epsilon``-wide tube.
-Errors inside the tube receive no penalty; observations outside it become
-support vectors. ``C`` controls the cost of deviations and ``epsilon`` controls
-the tube width.
+   \text{subject to}\quad
+   y_i(\mathbf{w}^{\mathsf T}\phi(\mathbf{x}_i)+b)\geq 1-\xi_i,
+   \qquad \xi_i\geq 0.
 
-.. code-block:: python
+The map :math:`\phi` is written explicitly because the same derivation applies
+in a transformed feature space.
 
-   from sklearn.svm import SVR
-   from mistic import score_svr
+Lagrange multipliers and the classification dual
+-------------------------------------------------
 
-   regressor = SVR(kernel="precomputed")
-   scorer = score_svr(weight=0.5)
+Introduce multipliers :math:`\alpha_i\geq0` for the margin constraints and
+:math:`\mu_i\geq0` for nonnegative slack. Stationarity of the Lagrangian gives
+
+.. math::
+
+   \mathbf{w}=\sum_i\alpha_i y_i\phi(\mathbf{x}_i),\qquad
+   \sum_i\alpha_i y_i=0,\qquad 0\leq\alpha_i\leq C.
+
+Substituting these conditions removes :math:`\mathbf w`, :math:`b`, and the
+slack variables, yielding the SVC dual:
+
+.. math::
+
+   \max_{\boldsymbol\alpha}
+   \left[
+   \sum_i\alpha_i-rac12\sum_{i,j}\alpha_i\alpha_j y_i y_j
+   K(\mathbf{x}_i,\mathbf{x}_j)
+   \right]
+
+.. math::
+
+   \text{subject to}\quad 0\leq\alpha_i\leq C,
+   \qquad \sum_i\alpha_i y_i=0.
+
+Only observations with :math:`\alpha_i>0` are support vectors. If
+:math:`\beta_i=\alpha_i y_i`, the decision function is
+
+.. math::
+
+   f_{\mathrm{SVC}}(\mathbf{x})=
+   \sum_{i\in SV}\beta_i K(\mathbf{x}_i,\mathbf{x})+b.
+
+The kernel trick
+----------------
+
+The dual uses transformed observations only through inner products
+:math:`\phi(\mathbf{x}_i)^{\mathsf T}\phi(\mathbf{x}_j)`. A kernel evaluates
+that inner product directly,
+
+.. math::
+
+   K(\mathbf{x}_i,\mathbf{x}_j)
+   =\phi(\mathbf{x}_i)^{\mathsf T}\phi(\mathbf{x}_j),
+
+without explicitly constructing the possibly high-dimensional coordinates.
+The optimization remains a linear maximum-margin problem in feature space even
+when its boundary is nonlinear in the original inputs. MISTIC computes these
+kernel matrices so it can recompute them after adding or removing feature
+groups.
+
+Support vector regression
+-------------------------
+
+SVR replaces the classification margin with an :math:`\varepsilon`-insensitive
+tube around a regression function [#svr]_. Deviations inside the tube have zero
+loss. The primal is
+
+.. math::
+
+   \min_{\mathbf w,b,\boldsymbol\xi,\boldsymbol\xi^*}
+   \frac12\lVert\mathbf w\rVert^2
+   +C\sum_i(\xi_i+\xi_i^*)
+
+subject to
+
+.. math::
+
+   y_i-f(\mathbf{x}_i)\leq\varepsilon+\xi_i,
+   \quad
+   f(\mathbf{x}_i)-y_i\leq\varepsilon+\xi_i^*,
+   \quad \xi_i,\xi_i^*\geq0.
+
+With one multiplier for each side of the tube, the dual becomes
+
+.. math::
+
+   \max_{\boldsymbol\alpha,\boldsymbol\alpha^*}
+   \left[
+   -\frac12(\boldsymbol\alpha-\boldsymbol\alpha^*)^{\mathsf T}
+   K(\boldsymbol\alpha-\boldsymbol\alpha^*)
+   -\varepsilon\sum_i(\alpha_i+\alpha_i^*)
+   +\sum_i y_i(\alpha_i-\alpha_i^*)
+   \right]
+
+.. math::
+
+   \text{subject to}\quad
+   0\leq\alpha_i,\alpha_i^*\leq C,
+   \qquad \sum_i(\alpha_i-\alpha_i^*)=0.
+
+Writing :math:`\beta_i=\alpha_i-\alpha_i^*`, the prediction function is
+
+.. math::
+
+   f_{\mathrm{SVR}}(\mathbf{x})=
+   \sum_{i\in SV}\beta_i K(\mathbf{x}_i,\mathbf{x})+b.
 
 MISTIC's regression score combines squared Pearson correlation with
-nonnegative R-squared; it also reports root mean squared error. Always interpret
-regression explanations and errors in the units of the modeled target,
-including any target transformation.
+nonnegative R-squared and also reports root mean squared error. Interpret errors
+and explanations in the units of the modeled target, including any target
+transformation.
 
-One-class classification
-------------------------
+One-class SVM
+-------------
 
-A one-class SVM learns the region occupied by an **inlier** class. It does not
-learn a conventional boundary between two labeled classes. Training uses
-inliers only; known novelties can be retained for validation and blind
-evaluation.
+A one-class SVM estimates a region containing most of an inlier distribution
+[#oneclass]_. It separates mapped observations from the origin. Its primal is
 
-.. code-block:: python
+.. math::
 
-   import numpy as np
-   from sklearn.svm import OneClassSVM
-   from mistic import cvSet, score_ocsvm
+   \min_{\mathbf w,\rho,\boldsymbol\xi}
+   \frac12\lVert\mathbf w\rVert^2
+   +\frac{1}{\nu n}\sum_i\xi_i-\rho
 
-   # +1 means inlier and -1 means novelty.
-   y_novelty = np.where(original_label == inlier_label, 1, -1)
-   splits = cvSet(X_development, y_novelty)
-   splits.one_class(num_sets=5, inlier_label=1)
+.. math::
 
-   detector = OneClassSVM(kernel="precomputed", nu=0.05)
-   scorer = score_ocsvm(weight=0.5)
+   \text{subject to}\quad
+   \mathbf w^{\mathsf T}\phi(\mathbf{x}_i)\geq\rho-\xi_i,
+   \qquad \xi_i\geq0.
 
-Positive decision values indicate inliers and negative values indicate
-novelties. ``nu`` jointly bounds the expected training-error fraction and
-support-vector fraction. The chosen inlier population changes the scientific
-question, preprocessing, and resulting explanations.
+The dual is
 
-Kernel choices
---------------
+.. math::
 
-* A **linear kernel** provides the most direct global geometry.
-* An **RBF kernel** models local nonlinear similarity; ``gamma`` controls how
-  quickly similarity decays.
-* A **polynomial kernel** represents interactions up to its configured degree.
+   \min_{\boldsymbol\alpha}\frac12\boldsymbol\alpha^{\mathsf T}
+   K\boldsymbol\alpha
+   \quad\text{subject to}\quad
+   0\leq\alpha_i\leq\frac{1}{\nu n},\quad\sum_i\alpha_i=1,
 
-Tune kernel and estimator parameters within the same resampling workflow.
-Comparing only training performance will favor overly flexible boundaries.
+and the signed decision function is
+
+.. math::
+
+   f_{\mathrm{OCSVM}}(\mathbf{x})=
+   \sum_{i\in SV}\alpha_iK(\mathbf{x}_i,\mathbf{x})-\rho.
+
+MISTIC and scikit-learn use :math:`+1` for inliers and :math:`-1` for
+novelties. Positive decision values lie on the learned inlier side. The choice
+of inlier population changes the scientific question, preprocessing, fitted
+region, and explanations.
+
+Connecting the three models
+---------------------------
+
+All three decision functions have the common sparse form
+
+.. math::
+
+   f(\mathbf{x})=\boldsymbol\beta^{\mathsf T}
+   \mathbf{k}(\mathbf{x})+b_0,
+
+where :math:`\mathbf{k}(\mathbf{x})` contains kernels between support vectors
+and :math:`\mathbf{x}`. The meanings of :math:`\boldsymbol\beta` and
+:math:`b_0` differ by model, but the shared form is what permits MISTIC's
+kernel perturbations and analytical gradients.
+
+References
+----------
+
+.. [#cortes] Cortes and Vapnik, `Support-vector networks
+   <https://doi.org/10.1007/BF00994018>`_, *Machine Learning* 20, 273–297
+   (1995).
+.. [#svr] Smola and Schölkopf, `A tutorial on support vector regression
+   <https://doi.org/10.1023/B:STCO.0000035301.49549.88>`_, *Statistics and
+   Computing* 14, 199–222 (2004).
+.. [#oneclass] Schölkopf et al., `Estimating the support of a high-dimensional
+   distribution <https://doi.org/10.1162/089976601750264965>`_, *Neural
+   Computation* 13, 1443–1471 (2001).

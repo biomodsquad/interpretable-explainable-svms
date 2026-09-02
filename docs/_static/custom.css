@@ -35,3 +35,59 @@
 @media (min-width: 70rem) {
   .content { max-width: 52rem; }
 }
+
+.svm-schematic {
+  background: linear-gradient(135deg, #f7faf9, #edf5f3);
+  border: 1px solid #c8d8d5;
+  border-radius: 0.8rem;
+  height: 19rem;
+  margin: 1.5rem 0 0.5rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.svm-schematic .hyperplane {
+  background: #193d43;
+  height: 140%;
+  left: 50%;
+  position: absolute;
+  top: -20%;
+  transform: rotate(24deg);
+  width: 3px;
+}
+
+.svm-schematic .margin {
+  background: repeating-linear-gradient(to bottom, #6c8f8b 0 8px, transparent 8px 14px);
+  height: 140%;
+  position: absolute;
+  top: -20%;
+  transform: rotate(24deg);
+  width: 2px;
+}
+
+.svm-schematic .margin.left { left: 38%; }
+.svm-schematic .margin.right { left: 62%; }
+.svm-schematic .point {
+  border: 2px solid white;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 25%);
+  height: 1rem;
+  position: absolute;
+  width: 1rem;
+}
+.svm-schematic .negative { background: #2f6fb0; }
+.svm-schematic .positive { background: #c95f48; }
+.svm-schematic .support { outline: 3px solid #e4aa28; outline-offset: 2px; }
+.svm-schematic .label {
+  background: rgb(255 255 255 / 88%);
+  border-radius: 0.25rem;
+  color: #23434a;
+  font-size: 0.78rem;
+  padding: 0.15rem 0.35rem;
+  position: absolute;
+}
+.svm-schematic .boundary-label { left: 51%; top: 3%; }
+.svm-schematic .negative-label { left: 5%; top: 4%; }
+.svm-schematic .positive-label { right: 5%; bottom: 4%; }
+.svm-schematic .margin-label { left: 36%; bottom: 3%; }
+.schematic-caption { color: #52666a; font-size: 0.88rem; margin-top: 0.4rem; }
