@@ -33,8 +33,12 @@ Synthetic-data validation studies and their generated results are kept in
 
 ## Documentation and tests
 
-Build the API documentation with `sphinx-build -W docs docs/_build/html` and
-run the test suite with `pytest`.
+Read the complete installation guide, framework overview, tutorials, examples,
+and API reference at
+[biomodsquad.github.io/interpretable-explainable-svms](https://biomodsquad.github.io/interpretable-explainable-svms/).
+
+Build the documentation locally with
+`sphinx-build -W docs docs/_build/html` and run the test suite with `pytest`.
 
 ## Repository
 

@@ -38,5 +38,18 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = "alabaster"
-html_static_path = []
+html_theme = "furo"
+html_title = f"MISTIC {release}"
+html_static_path = ["_static"]
+html_css_files = ["custom.css"]
+html_theme_options = {
+    "light_css_variables": {
+        "color-brand-primary": "#146b67",
+        "color-brand-content": "#146b67",
+        "color-admonition-background": "#edf8f6",
+    },
+    "dark_css_variables": {
+        "color-brand-primary": "#62d4c9",
+        "color-brand-content": "#62d4c9",
+    },
+}

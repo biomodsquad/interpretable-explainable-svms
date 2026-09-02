@@ -1,6 +1,11 @@
 API reference
 =============
 
+The tutorials explain how the objects fit together. This page documents every
+public class and function exposed by the package. Private methods beginning
+with an underscore are implementation details unless a tutorial explicitly
+identifies them as diagnostic tools.
+
 Public package namespace
 ------------------------
 
@@ -19,6 +24,13 @@ These objects are available directly from :mod:`mistic`.
    mistic.score_svc
    mistic.score_svr
    mistic.svmSet
+
+API index
+---------
+
+* :ref:`genindex`
+* :ref:`modindex`
+* :ref:`search`
 
 Cross-validation
 ----------------

@@ -1,0 +1,37 @@
+:root {
+  --mistic-ink: #163238;
+  --mistic-teal: #146b67;
+  --mistic-sand: #f3efe5;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin: 1.75rem 0 2.25rem;
+}
+
+.hero-actions a {
+  border-radius: 999px;
+  display: inline-block;
+  font-weight: 650;
+  padding: 0.65rem 1rem;
+  text-decoration: none;
+}
+
+.primary-action {
+  background: var(--mistic-teal);
+  color: white !important;
+}
+
+.secondary-action {
+  border: 1px solid var(--mistic-teal);
+}
+
+.admonition.tip {
+  border-color: var(--mistic-teal);
+}
+
+@media (min-width: 70rem) {
+  .content { max-width: 52rem; }
+}
