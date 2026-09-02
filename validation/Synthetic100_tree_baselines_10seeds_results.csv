@@ -1,0 +1,21 @@
+seed,method,num_models,num_features,signal_recall,signal_precision,cv_best_score,best_params,roc_auc,f1,balanced_accuracy,accuracy
+0,sklearn: random forest,1,100,0.25,0.25,0.906311671209927,"{'max_features': 0.5, 'min_samples_leaf': 1, 'n_estimators': 300}",0.902044513457557,0.7818181818181819,0.8042184265010353,0.808
+0,sklearn: histogram gradient boosting,1,100,0.4,0.4,0.8856004014605245,"{'l2_regularization': 1.0, 'learning_rate': 0.05, 'max_leaf_nodes': 15}",0.8995859213250517,0.7521367521367521,0.7696687370600415,0.768
+1,sklearn: random forest,1,100,0.4,0.4,0.8775509383837017,"{'max_features': 0.5, 'min_samples_leaf': 3, 'n_estimators': 300}",0.9122670807453417,0.7964601769911505,0.8148291925465838,0.816
+1,sklearn: histogram gradient boosting,1,100,0.35,0.35,0.8652913908556864,"{'l2_regularization': 1.0, 'learning_rate': 0.05, 'max_leaf_nodes': 15}",0.8995859213250517,0.7521367521367521,0.7696687370600415,0.768
+2,sklearn: random forest,1,100,0.4,0.4,0.8866569809199769,"{'max_features': 0.5, 'min_samples_leaf': 3, 'n_estimators': 300}",0.9127846790890268,0.7964601769911505,0.8148291925465838,0.816
+2,sklearn: histogram gradient boosting,1,100,0.15,0.15,0.8968083282806265,"{'l2_regularization': 0.0, 'learning_rate': 0.1, 'max_leaf_nodes': 15}",0.9083850931677018,0.7678571428571429,0.7897256728778468,0.792
+3,sklearn: random forest,1,100,0.45,0.45,0.8880071184705248,"{'max_features': 0.5, 'min_samples_leaf': 3, 'n_estimators': 300}",0.9151138716356108,0.7964601769911505,0.8148291925465838,0.816
+3,sklearn: histogram gradient boosting,1,100,0.15,0.15,0.8800763000489402,"{'l2_regularization': 1.0, 'learning_rate': 0.1, 'max_leaf_nodes': 15}",0.9050207039337475,0.7652173913043478,0.7841614906832298,0.784
+4,sklearn: random forest,1,100,0.25,0.25,0.8803286744035718,"{'max_features': 0.5, 'min_samples_leaf': 1, 'n_estimators': 300}",0.9019151138716357,0.7927927927927928,0.8131469979296067,0.816
+4,sklearn: histogram gradient boosting,1,100,0.4,0.4,0.875523383175572,"{'l2_regularization': 1.0, 'learning_rate': 0.05, 'max_leaf_nodes': 15}",0.8995859213250517,0.7521367521367521,0.7696687370600415,0.768
+5,sklearn: random forest,1,100,0.4,0.4,0.8903089709348259,"{'max_features': 0.5, 'min_samples_leaf': 3, 'n_estimators': 300}",0.9143374741200828,0.7889908256880734,0.8114648033126295,0.816
+5,sklearn: histogram gradient boosting,1,100,0.3,0.3,0.8838867613234919,"{'l2_regularization': 0.0, 'learning_rate': 0.05, 'max_leaf_nodes': 15}",0.906055900621118,0.8034188034188035,0.8181935817805384,0.816
+6,sklearn: random forest,1,100,0.15,0.15,0.8862768273677987,"{'max_features': 'sqrt', 'min_samples_leaf': 1, 'n_estimators': 300}",0.9107142857142857,0.8076923076923077,0.8315217391304348,0.84
+6,sklearn: histogram gradient boosting,1,100,0.3,0.3,0.8709691613675881,"{'l2_regularization': 0.0, 'learning_rate': 0.05, 'max_leaf_nodes': 15}",0.906055900621118,0.8034188034188035,0.8181935817805384,0.816
+7,sklearn: random forest,1,100,0.25,0.25,0.8939190986472109,"{'max_features': 0.5, 'min_samples_leaf': 1, 'n_estimators': 300}",0.9100672877846792,0.7927927927927928,0.8131469979296067,0.816
+7,sklearn: histogram gradient boosting,1,100,0.25,0.25,0.8691876646305512,"{'l2_regularization': 1.0, 'learning_rate': 0.1, 'max_leaf_nodes': 15}",0.9050207039337475,0.7652173913043478,0.7841614906832298,0.784
+8,sklearn: random forest,1,100,0.3,0.3,0.8845623520726119,"{'max_features': 0.5, 'min_samples_leaf': 1, 'n_estimators': 300}",0.9109730848861284,0.7857142857142857,0.8059006211180124,0.808
+8,sklearn: histogram gradient boosting,1,100,0.3,0.3,0.883314886777609,"{'l2_regularization': 0.0, 'learning_rate': 0.05, 'max_leaf_nodes': 15}",0.906055900621118,0.8034188034188035,0.8181935817805384,0.816
+9,sklearn: random forest,1,100,0.45,0.45,0.879747613117996,"{'max_features': 0.5, 'min_samples_leaf': 3, 'n_estimators': 300}",0.9143374741200828,0.7857142857142857,0.8059006211180124,0.808
+9,sklearn: histogram gradient boosting,1,100,0.25,0.25,0.8553845360445906,"{'l2_regularization': 1.0, 'learning_rate': 0.1, 'max_leaf_nodes': 15}",0.9050207039337475,0.7652173913043478,0.7841614906832298,0.784

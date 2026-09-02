@@ -4,6 +4,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from mistic.explanations import IntegratedGradientsResult
 
@@ -11,6 +12,7 @@ plt.switch_backend("Agg")
 
 
 OUTPUT_DIRECTORY = Path(__file__).parent / "_static" / "figures"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 FEATURE_NAMES = (
     "Concave points",
     "Worst texture",
@@ -138,11 +140,129 @@ def save_explanation_figures(result):
     plt.close(fig)
 
 
+def benchmark_results():
+    """Load paired measured results for the five documented methods."""
+    svm_results = pd.read_csv(
+        REPOSITORY_ROOT / "validation" / "Synthetic100_rank09_vs_sklearn_10seeds_results.csv"
+    )
+    tree_results = pd.read_csv(
+        REPOSITORY_ROOT / "validation" / "Synthetic100_tree_baselines_10seeds_results.csv"
+    )
+    labels = {
+        "MiSTIC forward-knee (weight=0.90)": "MISTIC",
+        "sklearn: all 100 features": "RBF SVC",
+        "sklearn: linear-SVM RFE (20)": "SVM-RFE",
+        "sklearn: random forest": "Random forest",
+        "sklearn: histogram gradient boosting": "Boosted trees",
+    }
+    combined = pd.concat((svm_results, tree_results), ignore_index=True)
+    combined = combined[combined["method"].isin(labels)].copy()
+    combined["display_method"] = combined["method"].map(labels)
+    return combined, list(labels.values())
+
+
+def save_benchmark_figures():
+    """Plot measured predictive and feature-recovery comparisons."""
+    results, order = benchmark_results()
+    colors = {
+        "MISTIC": "#146b67",
+        "RBF SVC": "#4979b8",
+        "SVM-RFE": "#7256a8",
+        "Random forest": "#c95f48",
+        "Boosted trees": "#e4aa28",
+    }
+    positions = np.arange(len(order))
+
+    fig, axes = plt.subplots(1, 3, figsize=(12.2, 4.2), sharey=True)
+    for ax, metric, title in zip(
+        axes,
+        ("roc_auc", "f1", "balanced_accuracy"),
+        ("ROC AUC", "F1", "Balanced accuracy"),
+    ):
+        summary = results.groupby("display_method")[metric].agg(["mean", "std"]).reindex(order)
+        for position, method in enumerate(order):
+            ax.errorbar(
+                summary.loc[method, "mean"],
+                position,
+                xerr=summary.loc[method, "std"],
+                color=colors[method],
+                marker="o",
+                markersize=8,
+                capsize=4,
+                linewidth=2,
+            )
+        ax.set_title(title)
+        ax.set_xlabel("Blind-set metric (mean ± SD)")
+        ax.grid(axis="x", alpha=0.25)
+    axes[0].set_yticks(positions, order)
+    axes[0].invert_yaxis()
+    fig.suptitle("Synthetic-100 predictive comparison across 10 inner seeds", fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIRECTORY / "synthetic-method-performance.png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+    summary = (
+        results.groupby("display_method")
+        .agg(
+            signal_recall=("signal_recall", "mean"),
+            signal_precision=("signal_precision", "mean"),
+            roc_auc=("roc_auc", "mean"),
+            roc_auc_sd=("roc_auc", "std"),
+            num_features=("num_features", "mean"),
+        )
+        .reindex(order)
+    )
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.7))
+    width = 0.36
+    axes[0].bar(
+        positions - width / 2,
+        summary["signal_recall"],
+        width,
+        color="#146b67",
+        label="Signal recall",
+    )
+    axes[0].bar(
+        positions + width / 2,
+        summary["signal_precision"],
+        width,
+        color="#7256a8",
+        label="Signal precision",
+    )
+    axes[0].set_xticks(positions, order, rotation=24, ha="right")
+    axes[0].set_ylim(0, 1.05)
+    axes[0].set_ylabel("Known-signal recovery")
+    axes[0].set_title("Selected or top-ranked feature set")
+    axes[0].legend(frameon=False)
+    axes[0].grid(axis="y", alpha=0.25)
+
+    for method in order:
+        axes[1].errorbar(
+            summary.loc[method, "num_features"],
+            summary.loc[method, "roc_auc"],
+            yerr=summary.loc[method, "roc_auc_sd"],
+            color=colors[method],
+            marker="o",
+            markersize=9,
+            capsize=4,
+            linestyle="none",
+            label=method,
+        )
+    axes[1].set_xlabel("Features used by the predictive model")
+    axes[1].set_ylabel("Blind ROC AUC (mean ± SD)")
+    axes[1].set_title("Performance versus model size")
+    axes[1].grid(alpha=0.25)
+    axes[1].legend(frameon=False, fontsize=8)
+    fig.suptitle("Predictive compactness and signal recovery", fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(OUTPUT_DIRECTORY / "synthetic-method-recovery.png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
 def main():
     """Generate every static tutorial figure."""
     OUTPUT_DIRECTORY.mkdir(parents=True, exist_ok=True)
     save_selection_curve()
     save_explanation_figures(example_result())
+    save_benchmark_figures()
 
 
 if __name__ == "__main__":

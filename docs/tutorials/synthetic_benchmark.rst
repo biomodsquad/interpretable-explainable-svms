@@ -27,18 +27,20 @@ importance estimation must occur without blind-set information.
    from sklearn.datasets import make_classification
    from sklearn.model_selection import train_test_split
 
-   seed = 7
+   data_seed = 2026
+   seed = 7               # inner resampling/model-building seed
    X, y = make_classification(
        n_samples=500,
        n_features=100,
-       n_informative=12,
-       n_redundant=8,
+       n_informative=10,
+       n_redundant=10,
        n_repeated=0,
        n_clusters_per_class=2,
+       weights=[0.55, 0.45],
        class_sep=1.0,
        flip_y=0.03,
        shuffle=False,       # known signal occupies columns 0 through 19
-       random_state=seed,
+       random_state=data_seed,
    )
    signal_features = set(range(20))
    X_dev, X_blind, y_dev, y_blind = train_test_split(
@@ -63,22 +65,27 @@ Measure discrimination, threshold behavior, and feature recovery separately:
        roc_auc_score,
    )
 
-   def evaluate(name, fitted, X_test, y_test, selected_features):
+   def evaluate(
+       name, fitted, X_test, y_test, ranked_features, model_feature_count=None
+   ):
        if hasattr(fitted, "decision_function"):
            score = fitted.decision_function(X_test)
        else:
            score = fitted.predict_proba(X_test)[:, 1]
        prediction = fitted.predict(X_test)
-       selected = set(map(int, selected_features))
-       recovered = selected & signal_features
+       ranked = set(map(int, ranked_features))
+       recovered = ranked & signal_features
        return {
            "method": name,
-           "n_features": len(selected),
+           "model_features": (
+               len(ranked) if model_feature_count is None else model_feature_count
+           ),
+           "ranked_features": len(ranked),
            "roc_auc": roc_auc_score(y_test, score),
            "f1": f1_score(y_test, prediction),
            "balanced_accuracy": balanced_accuracy_score(y_test, prediction),
            "signal_recall": len(recovered) / len(signal_features),
-           "signal_precision": len(recovered) / len(selected),
+           "signal_precision": len(recovered) / len(ranked),
        }
 
 Signal recall asks how much true signal was recovered. Signal precision asks
@@ -173,6 +180,7 @@ parameter tuning stay inside the cross-validation pipeline.
        X_blind,
        y_blind,
        range(X.shape[1]),
+       model_feature_count=X.shape[1],
    )
 
 SVM-RFE followed by RBF SVC
@@ -276,6 +284,7 @@ they are not fed back into model tuning.
        X_blind,
        y_blind,
        top_permutation_features(forest),
+       model_feature_count=X.shape[1],
    )
    boosted_result = evaluate(
        "Histogram gradient boosting",
@@ -283,6 +292,7 @@ they are not fed back into model tuning.
        X_blind,
        y_blind,
        top_permutation_features(boosted),
+       model_feature_count=X.shape[1],
    )
 
 Compare the results
@@ -298,6 +308,38 @@ Compare the results
        boosted_result,
    ]).set_index("method")
    results.sort_values("roc_auc", ascending=False)
+
+Measured paired comparison
+--------------------------
+
+The following figures report the repository's ten-seed benchmark on the fixed
+Synthetic-100 development/blind split described above. Points and bars are
+means; error bars are standard deviations across model-building seeds. Because
+every run evaluates the same blind observations, the variation measures
+resampling and fitting sensitivity rather than uncertainty over new test
+populations.
+
+.. figure:: ../_static/figures/synthetic-method-performance.png
+   :alt: Blind-set ROC AUC, F1, and balanced accuracy for five synthetic-data methods
+   :width: 100%
+
+   MISTIC, an all-feature RBF SVC, SVM-RFE followed by an RBF SVC, a random
+   forest, and histogram-boosted trees evaluated on the same blind set.
+   MISTIC produced the strongest mean performance for all three metrics in
+   this experiment.
+
+.. figure:: ../_static/figures/synthetic-method-recovery.png
+   :alt: Signal recovery and predictive performance versus model feature count
+   :width: 100%
+
+   Left: recovery of the 20 known informative-or-redundant signal variables.
+   The all-feature SVC's perfect recall is automatic because it retains all 100
+   inputs; its low precision exposes that distinction. Tree recovery uses the
+   top 20 development-set permutation ranks, SVM-RFE uses its 20 selected
+   variables, and MISTIC uses the unified ranking recorded by the validation
+   study. Right: blind ROC AUC versus the number of features used by each
+   predictive model; the MISTIC point uses the mean number of features in its
+   member models.
 
 Do not collapse the comparison to one number. Read the columns together:
 
