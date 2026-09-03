@@ -1,6 +1,11 @@
 The MISTIC framework
 ====================
 
+MISTIC stands for **Model Informed Feature Selection Through Importance and
+Contribution**. The name reflects its central design: feature selection is
+guided by evidence drawn from the fitted model and its response to feature
+perturbation.
+
 MISTIC organizes an interpretable SVM analysis into six connected layers:
 
 .. figure:: _static/figures/mistic-framework-workflow.png

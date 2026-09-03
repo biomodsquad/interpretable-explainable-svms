@@ -8,6 +8,8 @@
 
 # MISTIC
 
+**Model Informed Feature Selection Through Importance and Contribution**
+
 MISTIC provides feature selection and attribution for interpretable and
 explainable support vector machines.
 

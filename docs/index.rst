@@ -1,7 +1,7 @@
 MISTIC
 ======
 
-**Feature selection and explanation for support vector machines**
+**Model Informed Feature Selection Through Importance and Contribution**
 
 MISTIC is a Python framework for building interpretable support vector machine
 ensembles. It connects reproducible cross-validation, kernel-aware feature

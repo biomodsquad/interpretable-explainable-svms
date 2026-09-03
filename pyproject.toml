@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mistic-svm"
 version = "0.1.1"
-description = "Feature selection and attribution for interpretable support vector machines"
+description = "Model-informed feature selection through importance and contribution for SVMs"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
