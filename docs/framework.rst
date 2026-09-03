@@ -114,6 +114,8 @@ MISTIC exposes complementary evidence rather than one universal explanation:
 * **local perturbation** — how removing a group changes a sample's decision or
   positive-class probability;
 * **local gradients** — infinitesimal sensitivity around an observation;
+* **boundary counterfactuals** — local zero-decision reference points for
+  classification samples and ensemble members;
 * **integrated gradients** — an additive path attribution from a reference to
   an observation.
 

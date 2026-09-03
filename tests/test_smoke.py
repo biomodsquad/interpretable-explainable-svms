@@ -18,6 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in Python 3.10 CI
 
 import mistic
 from mistic import (
+    BoundaryCounterfactualResult,
     IntegratedGradientsResult,
     cvSet,
     kernelWrapper,
@@ -74,6 +75,7 @@ def test_public_api_and_version():
     assert set(mistic.__all__) == {
         "combined_rank",
         "cvSet",
+        "BoundaryCounterfactualResult",
         "IntegratedGradientsResult",
         "kernelWrapper",
         "paramSet",
@@ -472,6 +474,48 @@ def test_integrated_gradients_result_metadata_and_plots():
     ]
     assert all(axis.figure is not None for axis in axes)
     plt.close("all")
+
+
+def test_boundary_counterfactuals_are_exposed_and_reused_by_integrated_gradients():
+    import matplotlib.pyplot as plt
+
+    ensemble = _fitted_ensemble()
+    X = ensemble.cv.X[:4]
+    calls = []
+
+    def fixed_boundary(model_index, values, return_diagnostics=False):
+        calls.append(model_index)
+        points = np.asarray(values) * 0.5
+        success = np.ones(len(values), dtype=bool)
+        return (points, success) if return_diagnostics else points
+
+    ensemble._find_boundary_points = fixed_boundary
+    result = ensemble.explain_integrated_gradients(
+        X, feature_names=[f"measurement_{i}" for i in range(X.shape[1])],
+        target=ensemble.cv.y[:4], num_steps=4)
+
+    assert isinstance(result.counterfactuals, BoundaryCounterfactualResult)
+    assert calls == list(range(ensemble.num_models))
+    assert result.reference_points.shape == (ensemble.num_models, *X.shape)
+    np.testing.assert_allclose(
+        result.counterfactuals.values,
+        np.broadcast_to(X[np.newaxis] * 0.5, result.counterfactuals.values.shape),
+    )
+    np.testing.assert_allclose(
+        result.counterfactuals.distances,
+        np.linalg.norm(X * 0.5, axis=1)[np.newaxis].repeat(ensemble.num_models, axis=0),
+    )
+    assert result.counterfactuals.to_frame(model_index=0).shape == X.shape
+    assert result.counterfactuals.summary_plot().figure is not None
+    assert result.counterfactuals.sample_plot(0, model_index=0).figure is not None
+    plt.close("all")
+
+
+def test_boundary_counterfactuals_reject_regression_models():
+    ensemble = _fitted_ensemble()
+    ensemble.SVM = SVR(kernel="precomputed")
+    with np.testing.assert_raises(TypeError):
+        ensemble.explain_counterfactuals(ensemble.cv.X[:2])
 
 
 def test_integrated_gradients_heatmap_supports_continuous_target_and_existing_axis():

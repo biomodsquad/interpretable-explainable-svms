@@ -1,7 +1,7 @@
 """Interpretable and explainable support-vector-machine tools."""
 
 from .cvSet import cvSet
-from .explanations import IntegratedGradientsResult
+from .explanations import BoundaryCounterfactualResult, IntegratedGradientsResult
 from .svmSet import svmSet
 from .utility import (
     combined_rank,
@@ -17,6 +17,7 @@ __version__ = "0.1.1"
 
 __all__ = [
     "IntegratedGradientsResult",
+    "BoundaryCounterfactualResult",
     "combined_rank",
     "cvSet",
     "kernelWrapper",

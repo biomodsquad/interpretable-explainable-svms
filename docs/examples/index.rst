@@ -19,11 +19,11 @@ Classification
 
 `Forward selection <https://github.com/biomodsquad/interpretable-explainable-svms/blob/main/mistic/examples/BreastCancer_classification_forward.ipynb>`_
    RBF classification, combined-rank forward selection, blind evaluation, and
-   integrated-gradient plots.
+   boundary-counterfactual and integrated-gradient plots.
 
 `Backward selection <https://github.com/biomodsquad/interpretable-explainable-svms/blob/main/mistic/examples/BreastCancer_classification_backward.ipynb>`_
    Backward elimination across rank weights, with the same evaluation and
-   explanation workflow for a direct comparison.
+   boundary-counterfactual and attribution workflow for a direct comparison.
 
 `Probability workflow <https://github.com/biomodsquad/interpretable-explainable-svms/blob/main/mistic/examples/BreastCancer_classification_probability.ipynb>`_
    Probability-enabled SVC tuning, Brier-aware scoring, calibrated blind

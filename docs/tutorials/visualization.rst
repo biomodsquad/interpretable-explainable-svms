@@ -31,6 +31,33 @@ selection:
 Show uncertainty or member trajectories when possible. Mark the chosen knee;
 do not present the best point without the path that produced it.
 
+Boundary-counterfactual views
+-----------------------------
+
+For classification IG that uses automatically inferred references, retrieve
+the already-computed boundary explanation from the attribution result:
+
+.. code-block:: python
+
+   counterfactuals = result.counterfactuals
+
+   fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+   counterfactuals.summary_plot(ax=axes[0], max_features=12)
+   counterfactuals.sample_plot(
+       sample_index=0,
+       model_index=0,
+       ax=axes[1],
+       max_features=8,
+   )
+   fig.tight_layout()
+
+The summary ranks features by mean absolute movement from observed samples to
+their optimized boundary points. The sample view connects observed and
+counterfactual values for the features that moved most. If ``model_index`` is
+omitted, plots average over member-specific counterfactuals; show individual
+members when disagreement matters. Always report feature scaling, convergence,
+boundary residuals, and any feasibility constraints applied after optimization.
+
 Integrated-gradient heatmaps
 ----------------------------
 

@@ -28,7 +28,9 @@ alternatives reduce its selection frequency. In MISTIC:
 * **contribution** is represented by decision or probability changes after a
   feature or group is removed from the kernel calculation; and
 * **attribution** is represented by an integrated-gradient allocation from a
-  chosen reference observation to the observation being explained.
+  chosen reference observation to the observation being explained; and
+* **boundary counterfactuals** identify local zero-decision points that show
+  how an observation can move to the fitted classification boundary.
 
 Feature selection can combine importance and sample-level contribution through
 ``combined_rank``. Attribution is evaluated after fitting and should not be
@@ -86,6 +88,34 @@ Gradients
 local sensitivity. Gradients depend on feature scale; compare them only after
 considering preprocessing and units.
 
+Boundary counterfactuals
+------------------------
+
+For a classifier, MISTIC can optimize a zero-decision point starting from each
+observation. Each ensemble member has its own fitted boundary, so the result
+retains a separate point for every member and sample:
+
+.. code-block:: python
+
+   counterfactuals = model.explain_counterfactuals(
+       X_explain,
+       feature_names=feature_names,
+       target=y_explain,
+   )
+
+   member_zero_points = counterfactuals.values[0]
+   feature_changes = counterfactuals.deltas
+   boundary_distances = counterfactuals.distances
+   optimizer_converged = counterfactuals.optimization_success
+   counterfactual_table = counterfactuals.to_frame(model_index=0)
+
+These are **boundary counterfactuals**, not automatically actionable recourse.
+The optimization does not know which variables are immutable, which feature
+combinations are feasible, or which changes can cause others. Inspect
+``optimization_success`` and the residual ``decision_values`` before using a
+point, and apply domain constraints before interpreting a change as a possible
+intervention. Euclidean distances also depend on feature scale.
+
 Integrated gradients
 --------------------
 
@@ -135,6 +165,24 @@ to the observed output difference.
    attribution_table = result.to_frame()
    global_ig_importance = result.importance
 
+When no explicit reference is supplied for a classifier, MISTIC finds one
+boundary counterfactual per sample and member, uses those points as the IG
+references, and exposes the same computed result without a second optimization:
+
+.. code-block:: python
+
+   result = model.explain_integrated_gradients(
+       X_explain,
+       feature_names=feature_names,
+       target=y_explain,
+       num_steps=100,
+   )
+   boundary_counterfactuals = result.counterfactuals
+
+Supplying ``reference_point`` answers a different baseline question and leaves
+``result.counterfactuals`` as ``None``. Regression still requires an explicit
+reference because an SVR does not define a classification boundary.
+
 For a binary probability-enabled SVC, use ``output="probability"`` to explain
 the positive-class member-set probability. The reference is part of the
 question: zero is convenient for standardized data, while a real baseline or
@@ -144,7 +192,8 @@ Triangulating evidence
 ----------------------
 
 Use feature rank to describe selection, support vectors to identify boundary
-anchors, perturbations to test discrete removal, and integrated gradients to
+anchors, boundary counterfactuals to inspect local routes to a decision
+boundary, perturbations to test discrete removal, and integrated gradients to
 allocate local output differences. When they disagree, investigate feature
 correlation, interactions, saturation, and reference choice rather than
 averaging the methods into one unexplained number.

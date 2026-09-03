@@ -12,7 +12,7 @@ from sklearn.base import clone
 from sklearn.metrics import brier_score_loss, f1_score, r2_score, roc_auc_score
 from sklearn.svm import SVR, OneClassSVM
 
-from mistic.explanations import IntegratedGradientsResult
+from mistic.explanations import BoundaryCounterfactualResult, IntegratedGradientsResult
 from mistic.utility import (
     combined_rank,
     dotdict,
@@ -2951,7 +2951,7 @@ class svmSet:
         slope = -float(np.ravel(model.probA_)[0]) * probability * (1 - probability)
         return self.decision_gradient_(model_index, X) * slope[:, np.newaxis]
 
-    def _find_boundary_points(self, model_index, X):
+    def _find_boundary_points(self, model_index, X, return_diagnostics=False):
         """Optimize nearby zero-decision reference points.
 
         Parameters
@@ -2967,11 +2967,75 @@ class svmSet:
             Optimized zero-decision reference point for every observation.
         """
         boundary_points = np.zeros([len(X), self.cv.X.shape[1]])
+        success = np.zeros(len(X), dtype=bool)
         for i in range(len(X)):
             opt = minimize(svc_dec2, X[i, :], args=(self, model_index))
             boundary_points[i, :] = opt.x
+            success[i] = opt.success
 
+        if return_diagnostics:
+            return boundary_points, success
         return boundary_points
+
+    def explain_counterfactuals(
+        self, X, feature_names=None, target=None, model_index=None
+    ):
+        """Find local decision-boundary counterfactuals for observations.
+
+        One boundary point is optimized for every requested ensemble member
+        and sample. These are unconstrained local boundary references used by
+        MISTIC's default classification integrated gradients; they are not
+        guaranteed feasible, causal, or actionable recourse.
+
+        Parameters
+        ----------
+        X : numpy.ndarray of shape (n_samples, n_features)
+            Observations from which boundary searches begin.
+        feature_names : sequence of str or None, default=None
+            Names for all input columns.
+        target : array-like or None, default=None
+            Optional labels retained for plotting and exported metadata.
+        model_index : int or None, default=None
+            Member to explain, or ``None`` to find points for every member.
+
+        Returns
+        -------
+        mistic.explanations.BoundaryCounterfactualResult
+            Per-model boundary points, changes, distances, and diagnostics.
+        """
+        if isinstance(self.SVM, SVR):
+            raise TypeError("decision-boundary counterfactuals require a classifier")
+        X = np.asarray(X, dtype=float)
+        if X.ndim != 2 or X.shape[1] != self.cv.X.shape[1]:
+            raise ValueError("X must have shape (n_samples, n_features)")
+        if feature_names is None:
+            names = tuple(f"feature_{index}" for index in range(X.shape[1]))
+        else:
+            if len(feature_names) != X.shape[1]:
+                raise ValueError("feature_names must describe all input features")
+            names = tuple(map(str, feature_names))
+        model_indices = (
+            tuple(range(self.num_models)) if model_index is None else (int(model_index),)
+        )
+        points = np.empty((len(model_indices), *X.shape), dtype=float)
+        success = np.empty((len(model_indices), len(X)), dtype=bool)
+        decisions = np.empty((len(model_indices), len(X)), dtype=float)
+        for position, member in enumerate(model_indices):
+            points[position], success[position] = self._find_boundary_points(
+                member, X, return_diagnostics=True
+            )
+            decisions[position] = np.ravel(
+                self.decision_function(points[position], model_index=member)
+            )
+        return BoundaryCounterfactualResult(
+            values=points,
+            inputs=X,
+            feature_names=names,
+            model_indices=model_indices,
+            decision_values=decisions,
+            optimization_success=success,
+            target=target,
+        )
 
     def integrated_gradient(
         self,
@@ -3150,15 +3214,9 @@ class svmSet:
         mistic.explanations.IntegratedGradientsResult
             Immutable attributions and visualization metadata.
         """
+        if reference_point is not None and ref_point is not None:
+            raise ValueError("specify only reference_point, not both aliases")
         X = np.asarray(X)
-        values = self.integrated_gradient(
-            X,
-            model_index=model_index,
-            num_steps=num_steps,
-            reference_point=reference_point,
-            ref_point=ref_point,
-            output=output,
-        )
         if self.separate_feature_sets:
             if model_index is None:
                 self._update_unified_feature_attributes()
@@ -3177,15 +3235,56 @@ class svmSet:
                 names = tuple(map(str, feature_names))
             else:
                 raise ValueError("feature_names must describe all input or selected features")
-        supplied_reference = reference_point if reference_point is not None else ref_point
-        references = None
-        if supplied_reference is not None:
-            references = np.broadcast_to(np.asarray(supplied_reference), X.shape).copy()[
-                :, features
-            ]
         model_indices = (
             tuple(range(self.num_models)) if model_index is None else (int(model_index),)
         )
+        supplied_reference = reference_point if reference_point is not None else ref_point
+        counterfactuals = None
+        if supplied_reference is None and not isinstance(self.SVM, SVR):
+            counterfactual_feature_names = (
+                feature_names
+                if feature_names is not None and len(feature_names) == X.shape[1]
+                else None
+            )
+            counterfactuals = self.explain_counterfactuals(
+                X,
+                feature_names=counterfactual_feature_names,
+                target=target,
+                model_index=model_index,
+            )
+            references = counterfactuals.values[:, :, features]
+            if model_index is not None:
+                values = self.integrated_gradient(
+                    X, model_index=model_index, num_steps=num_steps,
+                    reference_point=counterfactuals.values[0], output=output
+                )
+            else:
+                values = np.zeros((len(X), len(features)), dtype=float)
+                feature_positions = {
+                    feature: position for position, feature in enumerate(features)
+                }
+                for position, member in enumerate(model_indices):
+                    member_values = self.integrated_gradient(
+                        X, model_index=member, num_steps=num_steps,
+                        reference_point=counterfactuals.values[position], output=output
+                    )
+                    member_features = (
+                        np.asarray(self.features[member], dtype=int)
+                        if self.separate_feature_sets else features
+                    )
+                    output_positions = [feature_positions[item] for item in member_features]
+                    values[:, output_positions] += member_values
+                values /= len(model_indices)
+        else:
+            values = self.integrated_gradient(
+                X, model_index=model_index, num_steps=num_steps,
+                reference_point=reference_point, ref_point=ref_point, output=output
+            )
+            references = None
+            if supplied_reference is not None:
+                references = np.broadcast_to(np.asarray(supplied_reference), X.shape).copy()[
+                    :, features
+                ]
         return IntegratedGradientsResult(
             values=values,
             inputs=X[:, features],
@@ -3195,6 +3294,7 @@ class svmSet:
             model_indices=model_indices,
             num_steps=num_steps,
             target=target,
+            counterfactuals=counterfactuals,
         )
 
     def plot_performance(self, metric="score"):

@@ -9,6 +9,127 @@ from matplotlib.colors import BoundaryNorm
 
 
 @dataclass(frozen=True)
+class BoundaryCounterfactualResult:
+    """Per-model decision-boundary counterfactuals for supplied samples.
+
+    ``values`` has shape ``(n_models, n_samples, n_features)``. These points
+    are local boundary references, not constrained or causal recourse.
+    """
+
+    values: np.ndarray
+    inputs: np.ndarray
+    feature_names: tuple
+    model_indices: tuple
+    decision_values: np.ndarray
+    optimization_success: np.ndarray
+    target: np.ndarray | None = None
+
+    def __post_init__(self):
+        values = np.asarray(self.values, dtype=float)
+        inputs = np.asarray(self.inputs, dtype=float)
+        decisions = np.asarray(self.decision_values, dtype=float)
+        success = np.asarray(self.optimization_success, dtype=bool)
+        if values.ndim != 3 or values.shape[1:] != inputs.shape:
+            raise ValueError("values must have shape (n_models, n_samples, n_features)")
+        if decisions.shape != values.shape[:2] or success.shape != values.shape[:2]:
+            raise ValueError("diagnostics must have shape (n_models, n_samples)")
+        if len(self.feature_names) != inputs.shape[1]:
+            raise ValueError("feature_names must match input columns")
+        if len(self.model_indices) != values.shape[0]:
+            raise ValueError("model_indices must match the counterfactual model axis")
+        if self.target is not None and len(self.target) != len(inputs):
+            raise ValueError("target must contain one value per sample")
+        object.__setattr__(self, "values", values)
+        object.__setattr__(self, "inputs", inputs)
+        object.__setattr__(self, "feature_names", tuple(map(str, self.feature_names)))
+        object.__setattr__(self, "model_indices", tuple(map(int, self.model_indices)))
+        object.__setattr__(self, "decision_values", decisions)
+        object.__setattr__(self, "optimization_success", success)
+        if self.target is not None:
+            object.__setattr__(self, "target", np.asarray(self.target))
+
+    @property
+    def deltas(self):
+        """Return counterfactual minus observed feature values."""
+        return self.values - self.inputs[np.newaxis, :, :]
+
+    @property
+    def distances(self):
+        """Return Euclidean input-to-boundary distance per model and sample."""
+        return np.linalg.norm(self.deltas, axis=2)
+
+    def _model_position(self, model_index):
+        if model_index is None:
+            return None
+        try:
+            return self.model_indices.index(int(model_index))
+        except ValueError as exc:
+            raise KeyError(f"model {model_index} is not present in this result") from exc
+
+    def to_frame(self, model_index=None):
+        """Return counterfactual values for one member or the member mean."""
+        position = self._model_position(model_index)
+        values = np.mean(self.values, axis=0) if position is None else self.values[position]
+        return pd.DataFrame(values, columns=self.feature_names)
+
+    def summary_plot(self, ax=None, model_index=None, max_features=20, bar_kwargs=None):
+        """Plot mean absolute movement needed to reach the boundary."""
+        if ax is None:
+            _, ax = plt.subplots()
+        position = self._model_position(model_index)
+        delta = self.deltas if position is None else self.deltas[position : position + 1]
+        importance = np.mean(np.abs(delta), axis=(0, 1))
+        count = min(int(max_features), len(importance))
+        order = np.argsort(importance, kind="stable")[-count:]
+        options = {"color": "#4C78A8", **(bar_kwargs or {})}
+        ax.barh(range(count), importance[order], **options)
+        ax.set_yticks(range(count), [self.feature_names[i] for i in order])
+        ax.set_xlabel("Mean absolute change to boundary")
+        ax.set_ylabel("Feature")
+        return ax
+
+    def sample_plot(
+        self, sample_index, ax=None, model_index=None, max_features=10,
+        original_kwargs=None, counterfactual_kwargs=None, line_kwargs=None,
+    ):
+        """Compare one observation with its boundary counterfactual."""
+        if ax is None:
+            _, ax = plt.subplots()
+        sample_index = int(sample_index)
+        if not 0 <= sample_index < len(self.inputs):
+            raise IndexError("sample_index is out of range")
+        position = self._model_position(model_index)
+        counterfactual = (
+            np.mean(self.values[:, sample_index, :], axis=0)
+            if position is None else self.values[position, sample_index, :]
+        )
+        original = self.inputs[sample_index]
+        order = np.argsort(np.abs(counterfactual - original), kind="stable")[-min(
+            int(max_features), len(original)
+        ):]
+        rows = np.arange(len(order))
+        lines = {"color": "0.65", "linewidth": 1.0, **(line_kwargs or {})}
+        for row, feature in enumerate(order):
+            ax.plot([original[feature], counterfactual[feature]], [row, row], **lines)
+        observed_options = {
+            "color": "#4C78A8", "s": 32, "zorder": 3, **(original_kwargs or {})
+        }
+        boundary_options = {
+            "color": "#E45756", "s": 32, "zorder": 3,
+            **(counterfactual_kwargs or {}),
+        }
+        ax.scatter(original[order], rows, label="Observed", **observed_options)
+        ax.scatter(
+            counterfactual[order], rows, label="Boundary counterfactual", **boundary_options
+        )
+        ax.set_yticks(rows, [self.feature_names[i] for i in order])
+        ax.set_xlabel("Feature value")
+        ax.set_ylabel("Feature")
+        ax.legend()
+        return ax
+
+
+@dataclass(frozen=True)
 class IntegratedGradientsResult:
     """Values and metadata produced by an integrated-gradients explanation.
 
@@ -28,13 +149,18 @@ class IntegratedGradientsResult:
     feature_names : tuple of str
         Display names corresponding to the attribution columns.
     reference_points : numpy.ndarray or None
-        Baseline points used by the integration paths.
+        Baseline points used by the integration paths. Inferred member-specific
+        boundary references have shape ``(n_models, n_samples, n_features)``;
+        explicitly supplied references have shape ``(n_samples, n_features)``.
     model_indices : tuple of int
         Ensemble members included in the explanation.
     num_steps : int
         Number of numerical integration steps.
     target : numpy.ndarray or None
         Optional class labels or regression targets for sample annotation.
+    counterfactuals : BoundaryCounterfactualResult or None
+        Boundary explanation reused by classification IG when no explicit
+        reference was supplied.
     """
 
     values: np.ndarray
@@ -45,6 +171,7 @@ class IntegratedGradientsResult:
     model_indices: tuple
     num_steps: int
     target: np.ndarray | None = None
+    counterfactuals: BoundaryCounterfactualResult | None = None
 
     def __post_init__(self):
         """Validate array shapes and normalize immutable result metadata.

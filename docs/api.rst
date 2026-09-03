@@ -15,6 +15,7 @@ These objects are available directly from :mod:`mistic`.
    :nosignatures:
 
    mistic.IntegratedGradientsResult
+   mistic.BoundaryCounterfactualResult
    mistic.combined_rank
    mistic.cvSet
    mistic.kernelWrapper
