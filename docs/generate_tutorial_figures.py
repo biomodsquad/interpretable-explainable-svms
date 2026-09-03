@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from mistic.explanations import IntegratedGradientsResult
+from mistic.explanations import BoundaryCounterfactualResult, IntegratedGradientsResult
 
 plt.switch_backend("Agg")
 
@@ -49,6 +49,27 @@ def example_result():
         model_indices=(0, 1, 2),
         num_steps=100,
         target=target,
+    )
+
+
+def example_counterfactuals(result):
+    """Create structured illustrative boundary points for three members."""
+    rng = np.random.default_rng(27)
+    # Move samples toward the center, with feature-specific and member-specific
+    # variation resembling local paths to nearby nonlinear decision boundaries.
+    strengths = np.array([0.42, 0.34, 0.27, 0.21, 0.16, 0.12, 0.08, 0.05])
+    member_scales = np.array([0.88, 1.0, 1.12])[:, np.newaxis, np.newaxis]
+    changes = -member_scales * result.inputs[np.newaxis, :, :] * strengths
+    changes += rng.normal(scale=0.025, size=changes.shape)
+    values = result.inputs[np.newaxis, :, :] + changes
+    return BoundaryCounterfactualResult(
+        values=values,
+        inputs=result.inputs,
+        feature_names=result.feature_names,
+        model_indices=result.model_indices,
+        decision_values=rng.normal(scale=2e-7, size=values.shape[:2]),
+        optimization_success=np.ones(values.shape[:2], dtype=bool),
+        target=result.target,
     )
 
 
@@ -104,6 +125,26 @@ def save_explanation_figures(result):
     )
     ax.set_title("Illustrative integrated-gradient profiles", fontweight="bold")
     fig.savefig(OUTPUT_DIRECTORY / "ig-heatmap.png", dpi=180, bbox_inches="tight")
+    plt.close(fig)
+
+    counterfactuals = example_counterfactuals(result)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.2))
+    counterfactuals.summary_plot(
+        ax=axes[0], max_features=8,
+        bar_kwargs={"color": "#146b67", "alpha": 0.86},
+    )
+    axes[0].set_title("Typical movement to the boundary", fontweight="bold")
+    counterfactuals.sample_plot(
+        sample_index=3, model_index=0, ax=axes[1], max_features=8,
+        original_kwargs={"color": "#4C78A8"},
+        counterfactual_kwargs={"color": "#E45756"},
+    )
+    axes[1].set_title("One sample and its boundary reference", fontweight="bold")
+    axes[1].legend(loc="upper right", frameon=False)
+    fig.tight_layout()
+    fig.savefig(
+        OUTPUT_DIRECTORY / "boundary-counterfactuals.png", dpi=180, bbox_inches="tight"
+    )
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(9.2, 5.8))

@@ -51,6 +51,14 @@ the already-computed boundary explanation from the attribution result:
    )
    fig.tight_layout()
 
+.. figure:: ../_static/figures/boundary-counterfactuals.png
+   :alt: Counterfactual summary bars beside a sample-level observed-to-boundary comparison.
+   :width: 100%
+
+   Illustrative boundary-counterfactual views. The summary shows which scaled
+   features move most on average; the sample view shows the direction and size
+   of each selected change for one ensemble member.
+
 The summary ranks features by mean absolute movement from observed samples to
 their optimized boundary points. The sample view connects observed and
 counterfactual values for the features that moved most. If ``model_index`` is
