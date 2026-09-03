@@ -5,6 +5,35 @@ An interpretation describes model structure or global behavior; an explanation
 attributes a particular output. MISTIC provides both, and each answers a
 different question.
 
+Three complementary questions
+-----------------------------
+
+.. figure:: ../_static/figures/mistic-interpretation-concepts.png
+   :alt: Schematics distinguishing feature importance, contribution, and attribution in MISTIC
+   :width: 100%
+
+   Importance describes how strongly a feature or group participates in global
+   model structure. Contribution measures how perturbing it changes the fitted
+   model's output. Attribution assigns part of one prediction's difference from
+   a reference to that feature. Importance and contribution can guide feature
+   selection; attribution is primarily a prediction-level explanation.
+
+These terms should not be treated as interchangeable. A feature can be
+globally important yet have little effect for a particular observation. A
+feature can also receive a strong local attribution even when correlated
+alternatives reduce its selection frequency. In MISTIC:
+
+* **importance** is represented by the kernel-objective or kernel-mass
+  perturbation criterion used in ranking;
+* **contribution** is represented by decision or probability changes after a
+  feature or group is removed from the kernel calculation; and
+* **attribution** is represented by an integrated-gradient allocation from a
+  chosen reference observation to the observation being explained.
+
+Feature selection can combine importance and sample-level contribution through
+``combined_rank``. Attribution is evaluated after fitting and should not be
+used to revise a model based on its blind-set explanations.
+
 Feature rank
 ------------
 

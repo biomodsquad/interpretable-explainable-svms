@@ -3,6 +3,25 @@ The MISTIC framework
 
 MISTIC organizes an interpretable SVM analysis into six connected layers:
 
+.. figure:: _static/figures/mistic-framework-workflow.png
+   :alt: MISTIC workflow connecting feature importance and contribution to feature selection, an SVM model, and prediction attribution
+   :width: 100%
+
+   MISTIC connects model-aware feature selection to SVM fitting and prediction
+   interpretation. Importance measures global model structure, contribution
+   measures the response to feature perturbation, and attribution explains how
+   features support an individual prediction.
+
+The left side of the schematic is an iterative development-data loop. MISTIC
+ranks candidate features or groups using importance and contribution evidence,
+updates the selected set, and refits or retunes the SVM as configured. Once the
+selection rule is fixed, the resulting model produces predictions and local
+attributions for new observations. This separation matters: blind observations
+belong only on the prediction-interpretation side and must not feed back into
+feature selection.
+
+The same workflow can be expressed through MISTIC's core software objects:
+
 .. code-block:: text
 
    raw data
