@@ -45,6 +45,17 @@ html_baseurl = "https://biomodsquad.org/interpretable-explainable-svms/"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_theme_options = {
+    "source_repository": "https://github.com/biomodsquad/interpretable-explainable-svms/",
+    "source_branch": "main",
+    "source_directory": "docs/",
+    "footer_icons": [
+        {
+            "name": "MISTIC on GitHub",
+            "url": "https://github.com/biomodsquad/interpretable-explainable-svms",
+            "html": "<span>GitHub repository</span>",
+            "class": "",
+        }
+    ],
     "light_css_variables": {
         "color-brand-primary": "#146b67",
         "color-brand-content": "#146b67",
