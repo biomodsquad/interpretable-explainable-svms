@@ -13,7 +13,8 @@ from sklearn.model_selection import GridSearchCV, StratifiedKFold, train_test_sp
 N_FEATURES = 100
 SIGNAL_FEATURES = set(range(20))
 INNER_SEEDS = range(10)
-OUTPUT = Path(__file__).with_name("Synthetic100_tree_baselines_10seeds_results.csv")
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+OUTPUT = REPOSITORY_ROOT / "validation" / "Synthetic100_tree_baselines_10seeds_results.csv"
 
 
 def metrics(y_true, prediction, probability):

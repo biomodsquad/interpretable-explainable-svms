@@ -1,7 +1,7 @@
 # MISTIC validation studies
 
-This directory contains the consolidated synthetic-data validation notebook,
-its supporting helper scripts, and generated result tables and figures.
+This directory contains the consolidated synthetic-data validation notebook
+and the six result tables it needs or shares with the documentation figures.
 
 ``Synthetic100_svmSet_benefit.ipynb`` is the canonical validation notebook. It
 compares forward- and backward-knee MISTIC selection across ensemble sizes and
@@ -16,6 +16,11 @@ tracked in the release repository. Their associated result tables are archived
 there as well. Only six CSV files remain here: four inputs required by the
 consolidated notebook and two inputs required by the documentation's measured
 comparison figures.
+
+The reproducible tree-baseline runner used by the documentation is located at
+``docs/benchmarks/synthetic_classification_tree_baselines.py``. Historical PNG
+outputs and experimental Python helpers are archived locally under the ignored
+``experimentation`` directory.
 
 These studies are kept separate from `mistic/examples`, which contains the
 smaller user-facing package examples. Run the notebook from the repository root
