@@ -4,6 +4,11 @@
   --mistic-sand: #f3efe5;
 }
 
+.sidebar-logo {
+  border-radius: 1rem;
+  max-height: 9rem;
+}
+
 .hero-actions {
   display: flex;
   flex-wrap: wrap;

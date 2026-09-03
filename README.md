@@ -1,3 +1,11 @@
+<p align="center">
+  <img
+    src="docs/_static/mistic-logo.jpg"
+    alt="MISTIC logo: hands interpreting a selected feature"
+    width="220"
+  >
+</p>
+
 # MISTIC
 
 MISTIC provides feature selection and attribution for interpretable and
