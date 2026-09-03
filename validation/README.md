@@ -12,8 +12,10 @@ disagreement, and stability across inner seeds.
 
 Exploratory and intermediate validation notebooks live under the locally
 ignored ``experimentation`` directory and are intentionally not distributed or
-tracked in the release repository. The result files retained here provide the
-inputs needed by the consolidated notebook and documentation figures.
+tracked in the release repository. Their associated result tables are archived
+there as well. Only six CSV files remain here: four inputs required by the
+consolidated notebook and two inputs required by the documentation's measured
+comparison figures.
 
 These studies are kept separate from `mistic/examples`, which contains the
 smaller user-facing package examples. Run the notebook from the repository root

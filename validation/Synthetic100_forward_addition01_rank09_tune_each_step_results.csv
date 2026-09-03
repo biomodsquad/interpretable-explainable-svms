@@ -1,4 +1,0 @@
-seed,direction,addition_factor,rank_weight,num_models,mean_member_features,min_member_features,max_member_features,num_unified_features,top20_signal_recall,top20_signal_precision,member_disagreement,search_curve_points,elapsed_seconds,roc_auc,f1,balanced_accuracy,accuracy
-0,forward,0.1,0.9,5,10.0,10,10,16,0.6,0.75,0.0864,7,8.06535120800254,0.9712732919254659,0.8947368421052632,0.9046325051759834,0.904
-1,forward,0.1,0.9,5,10.0,10,10,15,0.6,0.8,0.07039999999999999,7,7.877553624999564,0.9666149068322982,0.8869565217391304,0.8973861283643892,0.896
-2,forward,0.1,0.9,5,10.0,10,10,16,0.65,0.8125,0.088,7,8.96044458400138,0.9699792960662525,0.896551724137931,0.9063146997929608,0.904
