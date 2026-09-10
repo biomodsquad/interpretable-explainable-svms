@@ -82,9 +82,9 @@ class BenchmarkConfig:
     mistic_c_bounds: tuple[float, float] = (0.25, 8.0)
     mistic_gamma_bounds: tuple[float, float] = (2**-9, 2**-1)
     mistic_mixed_linear_weights: tuple[float, ...] = (0.25, 0.5, 0.75)
-    mistic_independent_candidate_features: int = 5
-    mistic_max_kernel_features: int = 5
-    mistic_num_initial_kernel_features: int = 1
+    mistic_max_candidate_features: int = 5
+    mistic_max_selection_features: int = 5
+    mistic_num_initial_selection_units: int = 1
     random_seed: int = 42
 
 
@@ -331,7 +331,7 @@ class MisticClassifier:
         if independent:
             num_feature_medoids = min(
                 num_feature_medoids,
-                self.config.mistic_independent_candidate_features,
+                self.config.mistic_max_candidate_features,
             )
         max_features = (
             feature_budget if self.config.mistic_max_features is None
@@ -361,14 +361,14 @@ class MisticClassifier:
         )
         if independent:
             pair_budget = min(
-                self.config.mistic_max_kernel_features,
+                self.config.mistic_max_selection_features,
                 len(kernel.base_kernels) * len(splits.feature_medoids_),
             )
             self.ensemble_.greedy_forward_selection(
                 parameter_grid=grid,
                 max_features=pair_budget,
                 addition_factor=self.config.mistic_addition_factor,
-                num_initial_medoids=self.config.mistic_num_initial_kernel_features,
+                num_initial_medoids=self.config.mistic_num_initial_selection_units,
                 feature_ranker=combined_rank(
                     weight=self.config.mistic_rank_weight).compute,
             )
