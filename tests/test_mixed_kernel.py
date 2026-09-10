@@ -261,6 +261,41 @@ def test_forward_kernel_selection_addition_factor_batches_remaining_budget():
     assert len(ensemble.kernel_feature_performance_[0]["added_kernel"]) == 3
 
 
+def test_forward_kernel_selection_accepts_kernel_unit_feature_ranker():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:60, :2], y[:60])
+    splits.classification(num_sets=2)
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_method=score_svc().score,
+        kernel=kernelWrapper("linear", name="linear")
+        + kernelWrapper("rbf", name="radial"),
+        kernel_feature_selection="independent",
+    )
+    calls = []
+
+    def ranker(model, model_index, set_for_rank):
+        state = model._selection_state_for()
+        candidates = [i for i in range(len(state.selection_space)) if i not in state.active]
+        if not candidates:
+            candidates = sorted(state.active)
+        calls.append((model_index, set_for_rank, len(candidates)))
+        return np.arange(len(candidates))
+
+    ensemble.greedy_forward_kernel_selection(
+        [paramSet({"C": 1.0}, {"gamma": 0.001})],
+        max_kernel_features=2,
+        addition_factor=0,
+        feature_ranker=ranker,
+    )
+
+    assert calls
+    assert all(set_name == "train" for _, set_name, _ in calls)
+    assert len(ensemble.selected_selection_units_) == 2
+    assert ensemble.selection_state_.active == frozenset(ensemble.selected_selection_units_)
+
+
 def test_forward_kernel_selection_validates_addition_factor():
     X, y = load_breast_cancer(return_X_y=True)
     splits = cvSet(X[:40, :2], y[:40])

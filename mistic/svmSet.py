@@ -415,12 +415,64 @@ class svmSet:
         )
         self.set_selection_units(indices, model_index, update_kernel)
 
+    def kernel_feature_sensitivity_rank(self, model_index, set_for_rank="train"):
+        """Rank selectable kernel/perturbation units by frozen-model sensitivity.
+
+        The fitted SVM parameters and support vectors are held fixed. Each
+        inactive unit is added in isolation (or, when all units are active,
+        each active unit is removed), and the squared change in decision value
+        is accumulated over the requested observations. Higher rank values
+        indicate greater sensitivity.
+        """
+        state = self._selection_state_for()
+        candidate_indices = [
+            index for index in range(len(state.selection_space)) if index not in state.active
+        ]
+        removing = not candidate_indices
+        if removing:
+            candidate_indices = sorted(state.active)
+        if set_for_rank == "sample":
+            rng = np.random.default_rng(0)
+            source = self.cv.X
+            X_rank = rng.normal(
+                np.mean(source, axis=0), np.std(source, axis=0), (100, source.shape[1])
+            )
+        else:
+            X_rank = self.cv.X[np.asarray(getattr(self.cv, set_for_rank)[model_index], dtype=int)]
+
+        baseline = np.asarray(
+            self.decision_function(X_rank, model_index=model_index, prediction_mode="set")
+        )
+        original_active = state.active
+        original_unified_model = self.unified_model_
+        scores = []
+        try:
+            for index in candidate_indices:
+                proposal = (
+                    original_active.difference({index})
+                    if removing
+                    else original_active.union({index})
+                )
+                self.set_selection_units(proposal, update_kernel=False)
+                perturbed = np.asarray(
+                    self.decision_function(
+                        X_rank, model_index=model_index, prediction_mode="set"
+                    )
+                )
+                scores.append(float(np.sum((perturbed - baseline) ** 2)))
+        finally:
+            self.set_selection_units(original_active, update_kernel=False)
+            self.unified_model_ = original_unified_model
+        return rank_items(np.asarray(scores))
+
     def greedy_forward_kernel_selection(
         self,
         parameter_grid,
         max_kernel_features=None,
         addition_factor=0.1,
         num_initial_kernel_features=1,
+        feature_ranker=None,
+        set_for_rank="train",
     ):
         """Greedily select independent ``(kernel, feature)`` assignments.
 
@@ -446,6 +498,13 @@ class svmSet:
         num_initial_kernel_features : int, default=1
             Number of the best singleton ``(kernel, feature)`` candidates
             fitted together in the initial iteration.
+        feature_ranker : callable or None, default=None
+            Kernel-unit ranker called as ``(svm_set, model_index,
+            set_for_rank)``. When supplied, the initial full model and every
+            later fitted subset are ranked by frozen-model sensitivity rather
+            than selecting units by repeated CV proposal scores.
+        set_for_rank : str, default="train"
+            CV index collection used by ``feature_ranker``.
 
         Returns
         -------
@@ -488,6 +547,16 @@ class svmSet:
         if not 1 <= num_initial_kernel_features <= max_kernel_features:
             raise ValueError(
                 "num_initial_kernel_features must be between 1 and max_kernel_features"
+            )
+
+        if feature_ranker is not None:
+            return self._ranked_forward_kernel_selection(
+                parameter_grid,
+                max_kernel_features,
+                addition_factor,
+                num_initial_kernel_features,
+                feature_ranker,
+                set_for_rank,
             )
 
         self.kernel_features = {
@@ -560,6 +629,109 @@ class svmSet:
         self.kernel_feature_performance_ = history
         # Keep plotting/reporting utilities useful while making their x-axis
         # semantics explicit through the additional pair-count column.
+        self.feature_performance_ = history
+        self.fit_unified_model(parameter_grid)
+
+    def _ranked_forward_kernel_selection(
+        self,
+        parameter_grid,
+        max_kernel_features,
+        addition_factor,
+        num_initial_kernel_features,
+        feature_ranker,
+        set_for_rank,
+    ):
+        """Run sensitivity-ranked forward selection over kernel-aware units."""
+        def rank(model_index):
+            """Support both bound svmSet methods and ordinary ranker callables."""
+            if getattr(feature_ranker, "__self__", None) is self:
+                return feature_ranker(model_index, set_for_rank)
+            return feature_ranker(self, model_index, set_for_rank)
+
+        all_indices = tuple(range(len(self.selection_space_)))
+        self.set_selection_units(all_indices, update_kernel=False)
+        self._tune_member_models(parameter_grid)
+        rank_total = np.zeros(len(all_indices), dtype=float)
+        for model_index in range(self.num_models):
+            ranks = np.asarray(rank(model_index), dtype=float)
+            if len(ranks) != len(all_indices):
+                raise ValueError("feature_ranker must return one rank per candidate selection unit")
+            rank_total += ranks
+        ordered = list(np.argsort(rank_total, kind="stable")[::-1])
+
+        selected = []
+        used = 0
+        for index in ordered:
+            width = len(self.selection_space_[index].features)
+            if used + width <= max_kernel_features:
+                selected.append(int(index))
+                used += width
+            if len(selected) >= num_initial_kernel_features:
+                break
+        if len(selected) != num_initial_kernel_features:
+            raise ValueError("initial selection units exceed max_kernel_features")
+
+        history = {}
+        step = 0
+        last_additions = []
+        while True:
+            self.set_selection_units(selected, update_kernel=False)
+            self._tune_member_models(parameter_grid)
+            row = copy.deepcopy(self.mean_performance())
+            units = [self.selection_space_[index] for index in selected]
+            row["num_kernel_features"] = sum(len(unit.features) for unit in units)
+            row["num_features"] = len(self.features)
+            additions = selected if step == 0 else last_additions
+            row["added_kernel"] = tuple(
+                self.selection_space_[index].kernel_id for index in additions
+            )
+            row["added_feature"] = tuple(
+                self.selection_space_[index].features for index in additions
+            )
+            history[step] = row
+            current_count = int(row["num_kernel_features"])
+            print(
+                f"Kernel features: {current_count}, unique features: {len(self.features)}, "
+                f"Score: {float(row['score']):.3f}"
+            )
+            if current_count >= max_kernel_features:
+                break
+
+            inactive = [index for index in all_indices if index not in selected]
+            if not inactive:
+                break
+            rank_total = np.zeros(len(inactive), dtype=float)
+            for model_index in range(self.num_models):
+                ranks = np.asarray(rank(model_index), dtype=float)
+                if len(ranks) != len(inactive):
+                    raise ValueError(
+                        "feature_ranker must return one rank per inactive selection unit"
+                    )
+                rank_total += ranks
+            remaining = max_kernel_features - current_count
+            target = 1 if addition_factor == 0 else max(1, int(np.floor(remaining * addition_factor)))
+            last_additions = []
+            added_width = 0
+            for position in np.argsort(rank_total, kind="stable")[::-1]:
+                index = inactive[int(position)]
+                width = len(self.selection_space_[index].features)
+                if width <= remaining - added_width:
+                    last_additions.append(index)
+                    added_width += width
+                if added_width >= target:
+                    break
+            if not last_additions:
+                break
+            selected.extend(last_additions)
+            step += 1
+
+        self.selected_selection_units_ = tuple(selected)
+        self.selected_kernel_features_ = tuple(
+            (unit.kernel_id, feature)
+            for unit in (self.selection_space_[index] for index in selected)
+            for feature in unit.features
+        )
+        self.kernel_feature_performance_ = history
         self.feature_performance_ = history
         self.fit_unified_model(parameter_grid)
 
