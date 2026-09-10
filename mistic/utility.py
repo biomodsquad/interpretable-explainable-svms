@@ -488,7 +488,7 @@ class kernelWrapper:
         Kernel metric passed to scikit-learn.
     """
 
-    def __init__(self, type="rbf"):
+    def __init__(self, type="rbf", name=None, features=None):
         """Select a kernel accepted by scikit-learn pairwise kernels.
 
         Parameters are documented on :class:`kernelWrapper`.
@@ -499,6 +499,38 @@ class kernelWrapper:
         """
         # [‘additive_chi2’, ‘chi2’, ‘linear’, ‘poly’, ‘polynomial’, ‘rbf’, ‘laplacian’, ‘sigmoid’, ‘cosine’]
         self.type = type
+        self.name = name
+        self.features = features
+
+    def params_needed(self):
+        """Return the parameters understood by this kernel type."""
+        return {
+            "linear": [],
+            "rbf": ["gamma"],
+            "poly": ["gamma", "degree", "coef0"],
+            "polynomial": ["gamma", "degree", "coef0"],
+            "sigmoid": ["gamma", "coef0"],
+        }.get(self.type, [])
+
+    def __add__(self, other):
+        from .mixed_kernel import MixedKernel
+
+        return MixedKernel.from_operand(self) + other
+
+    def __mul__(self, other):
+        from .mixed_kernel import MixedKernel
+
+        return MixedKernel.from_operand(self) * other
+
+    def __rmul__(self, other):
+        from .mixed_kernel import MixedKernel
+
+        return other * MixedKernel.from_operand(self)
+
+    def __pow__(self, power):
+        from .mixed_kernel import MixedKernel
+
+        return MixedKernel.from_operand(self) ** power
 
     def compute(self, X, feature_index, parameters=None, Y=None):
         """Compute a kernel matrix over the selected feature columns.
@@ -568,25 +600,35 @@ class kernelWrapper:
         """
         if Y is None:
             Y = []
+        gamma = parameters.get("gamma", 1.0 / len(feature_index))
         if self.type == "rbf":
             K = self.compute(X, feature_index=feature_index, parameters=parameters, Y=Y)
 
             kernel_gradient = (
-                2 * parameters["gamma"] * (X[:, wrt, np.newaxis] - Y[np.newaxis, :, wrt]) * K
+                2 * gamma * (X[:, wrt, np.newaxis] - Y[np.newaxis, :, wrt]) * K
             )
 
         elif self.type == "linear":
             kernel_gradient = np.broadcast_to(X[:, wrt, np.newaxis], (len(X), len(Y)))
 
-        elif self.type == "polynomial":
+        elif self.type in ("poly", "polynomial"):
             # K(X, Y) = (gamma <X, Y> + coef0) ^ degree
             d_parameters = copy.deepcopy(parameters)
             d_parameters["degree"] = parameters["degree"] - 1
 
             kernel_gradient = (
                 parameters["degree"]
+                * gamma
                 * X[:, wrt, np.newaxis]
                 * self.compute(X, feature_index, d_parameters, Y)
+            )
+
+        elif self.type == "sigmoid":
+            K = self.compute(X, feature_index=feature_index, parameters=parameters, Y=Y)
+            kernel_gradient = (
+                gamma
+                * X[:, wrt, np.newaxis]
+                * (1.0 - K**2)
             )
 
         else:

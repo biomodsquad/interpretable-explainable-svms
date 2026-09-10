@@ -45,6 +45,9 @@ class svmSet:
     perturbation_normalization : {"per_feature", "sqrt", "none"}, default="per_feature"
         Group-size normalization applied to importance and decision
         perturbations before ranking.
+    kernel_feature_selection : {"shared", "independent"}, default="shared"
+        Whether a mixed kernel uses the legacy global feature set or stores
+        independently selectable features for each named base kernel.
 
     Attributes
     ----------
@@ -55,7 +58,9 @@ class svmSet:
     models : list
         Fitted cross-validation member estimators.
     features : numpy.ndarray or list of numpy.ndarray
-        Active feature indices, shared or stored per member.
+        Union of active original feature indices, shared or stored per member.
+    kernel_features : dict or list of dict
+        Active features by base-kernel name in independent mode.
     unified_features : numpy.ndarray
         Union of active features across all members.
     parameters_ : mistic.utility.paramSet or list of paramSet
@@ -96,6 +101,7 @@ class svmSet:
         separate_parameters=False,
         perturbation_sets=None,
         perturbation_normalization="per_feature",
+        kernel_feature_selection="shared",
     ):
         """Initialize estimators, feature sets, kernels, splits, and scoring.
 
@@ -112,6 +118,9 @@ class svmSet:
         self.num_models = len(self.cv.train)
         self.separate_feature_sets = separate_feature_sets
         self.separate_parameters = separate_parameters
+        if kernel_feature_selection not in {"shared", "independent"}:
+            raise ValueError("kernel_feature_selection must be 'shared' or 'independent'")
+        self.kernel_feature_selection = kernel_feature_selection
 
         if self.separate_feature_sets:
             self.features = []
@@ -138,6 +147,17 @@ class svmSet:
         self.perturbation_normalization = perturbation_normalization
 
         self.kernel = kernelWrapper() if kernel is None else kernel
+        if self.kernel_feature_selection == "independent":
+            from .mixed_kernel import MixedKernel
+
+            if not isinstance(self.kernel, MixedKernel):
+                raise TypeError("independent kernel feature selection requires a MixedKernel")
+            initial = self._initial_kernel_features()
+            self.kernel_features = (
+                [copy.deepcopy(initial) for _ in range(self.num_models)]
+                if self.separate_feature_sets
+                else initial
+            )
         self._reset_kernel_matrix()
         self._kernel_configuration_ = None
 
@@ -193,7 +213,245 @@ class svmSet:
             self.unified_model_ = None
             self.unified_parameters_ = None
             self.unified_prediction_features_ = None
+        if "kernel_feature_selection" not in self.__dict__:
+            self.kernel_feature_selection = "shared"
         self._update_unified_feature_attributes()
+
+    def _initial_kernel_features(self):
+        """Return all eligible input features for every mixed-kernel leaf."""
+        result = {}
+        for index, (name, kernel) in enumerate(zip(self.kernel.kernel_names, self.kernel.base_kernels)):
+            allowed = kernel.features
+            if self.kernel.feature_sets is not None:
+                allowed = self.kernel.feature_sets[index]
+            if allowed is None:
+                allowed = np.arange(self.cv.X.shape[1])
+            result[name] = np.asarray(allowed, dtype=int).copy()
+        return result
+
+    def _kernel_features_for(self, model_index=None):
+        """Return the feature argument used for one kernel computation."""
+        if self.kernel_feature_selection != "independent":
+            return self.features[model_index] if self.separate_feature_sets else self.features
+        if self.separate_feature_sets:
+            if model_index is None:
+                raise ValueError("model_index is required for separate kernel feature sets")
+            return self.kernel_features[model_index]
+        return self.kernel_features
+
+    def _unified_kernel_features(self):
+        """Combine member-specific kernel features for the unified predictor."""
+        if self.kernel_feature_selection != "independent":
+            return self._ranked_unified_prediction_features()
+        if not self.separate_feature_sets:
+            return copy.deepcopy(self.kernel_features)
+        combined = {}
+        for name in self.kernel.kernel_names:
+            values = [mapping[name] for mapping in self.kernel_features if len(mapping[name])]
+            combined[name] = (
+                np.unique(np.concatenate(values)) if values else np.asarray([], dtype=int)
+            )
+        return combined
+
+    def _sync_features_from_kernels(self):
+        """Keep the public original-feature union synchronized with kernel features."""
+        if self.kernel_feature_selection != "independent":
+            return
+        mappings = self.kernel_features if self.separate_feature_sets else [self.kernel_features]
+        unions = []
+        for mapping in mappings:
+            active = [np.asarray(values, dtype=int) for values in mapping.values() if len(values)]
+            unions.append(np.unique(np.concatenate(active)) if active else np.asarray([], dtype=int))
+        self.features = unions if self.separate_feature_sets else unions[0]
+        self._update_unified_feature_attributes()
+
+    def set_kernel_features(self, kernel_name, features, model_index=None, update_kernel=True):
+        """Set active features for one base kernel without changing other kernels."""
+        if self.kernel_feature_selection != "independent":
+            raise RuntimeError("set kernel_feature_selection='independent' when constructing svmSet")
+        if kernel_name not in self.kernel.kernel_names:
+            raise KeyError(f"unknown base kernel {kernel_name!r}")
+        if self.separate_feature_sets and model_index is None:
+            raise ValueError("model_index is required for separate kernel feature sets")
+        if model_index is not None and not 0 <= model_index < self.num_models:
+            raise IndexError("model_index is out of range")
+        values = np.asarray(features, dtype=int)
+        if values.ndim != 1 or np.any(values < 0) or np.any(values >= self.cv.X.shape[1]):
+            raise ValueError("kernel features must be valid one-dimensional column indices")
+        mapping = self.kernel_features[model_index] if self.separate_feature_sets else self.kernel_features
+        mapping[kernel_name] = np.unique(values)
+        self.unified_model_ = None
+        self._kernel_configuration_ = None
+        self._sync_features_from_kernels()
+        if update_kernel and hasattr(self, "parameters_"):
+            self._reset_kernel_matrix()
+            self._update_kernel_matrix()
+            self._kernel_configuration_ = self._kernel_configuration(self.parameters_)
+
+    def remove_kernel_features(self, kernel_name, features, model_index=None, update_kernel=True):
+        """Remove features from exactly one base kernel."""
+        if self.separate_feature_sets and model_index is None:
+            raise ValueError("model_index is required for separate kernel feature sets")
+        mapping = self.kernel_features[model_index] if self.separate_feature_sets else self.kernel_features
+        retained = np.asarray(mapping[kernel_name], dtype=int)
+        retained = retained[~np.isin(retained, np.asarray(features, dtype=int))]
+        self.set_kernel_features(kernel_name, retained, model_index, update_kernel)
+
+    def add_kernel_features(self, kernel_name, features, model_index=None, update_kernel=True):
+        """Add features to exactly one base kernel."""
+        if self.separate_feature_sets and model_index is None:
+            raise ValueError("model_index is required for separate kernel feature sets")
+        mapping = self.kernel_features[model_index] if self.separate_feature_sets else self.kernel_features
+        expanded = np.concatenate((np.asarray(mapping[kernel_name], dtype=int), np.asarray(features, dtype=int)))
+        self.set_kernel_features(kernel_name, expanded, model_index, update_kernel)
+
+    def greedy_forward_kernel_selection(
+        self,
+        parameter_grid,
+        max_kernel_features=None,
+        addition_factor=0.1,
+        num_initial_kernel_features=1,
+    ):
+        """Greedily select independent ``(kernel, feature)`` assignments.
+
+        This selector uses one shared kernel-feature mapping across the CV
+        members. A feature may be selected for several kernels, and removing
+        or omitting one assignment does not affect the others. Results are
+        stored in ``kernel_feature_performance_`` and
+        ``selected_kernel_features_``; each performance row reports both the
+        number of kernel-feature pairs and the number of unique input columns.
+
+        Parameters
+        ----------
+        parameter_grid : iterable of mistic.utility.paramSet
+            Model and mixed-kernel candidates evaluated for every proposal.
+        max_kernel_features : int or None, default=None
+            Maximum number of selected kernel-feature pairs.
+        addition_factor : float, default=0.1
+            Fraction of the remaining distance to ``max_kernel_features``
+            added after the initial iteration. Zero adds exactly one pair.
+            Candidate pairs are ranked by the validation score obtained when
+            each is added individually, and the highest-ranked batch is then
+            fitted jointly.
+        num_initial_kernel_features : int, default=1
+            Number of the best singleton ``(kernel, feature)`` candidates
+            fitted together in the initial iteration.
+
+        Returns
+        -------
+        None
+        """
+        if self.kernel_feature_selection != "independent":
+            raise RuntimeError("kernel_feature_selection must be 'independent'")
+        if self.separate_feature_sets:
+            raise ValueError(
+                "greedy_forward_kernel_selection requires separate_feature_sets=False; "
+                "the selected kernel-feature mapping is shared across CV members"
+            )
+        parameter_grid = list(parameter_grid)
+        if not parameter_grid:
+            raise ValueError("parameter_grid must contain at least one candidate")
+        if not isinstance(addition_factor, (int, float, np.integer, np.floating)):
+            raise TypeError("addition_factor must be numeric")
+        if addition_factor < 0:
+            raise ValueError("addition_factor must be nonnegative")
+
+        eligible = copy.deepcopy(self.kernel_features)
+        candidates = [
+            (name, int(feature))
+            for name in self.kernel.kernel_names
+            for feature in eligible[name]
+        ]
+        total = len(candidates)
+        if max_kernel_features is None:
+            max_kernel_features = total
+        if isinstance(max_kernel_features, (bool, np.bool_)) or not isinstance(
+            max_kernel_features, (int, np.integer)
+        ):
+            raise TypeError("max_kernel_features must be an integer")
+        if not 1 <= max_kernel_features <= total:
+            raise ValueError("max_kernel_features must be between 1 and the eligible pair count")
+        if isinstance(num_initial_kernel_features, (bool, np.bool_)) or not isinstance(
+            num_initial_kernel_features, (int, np.integer)
+        ):
+            raise TypeError("num_initial_kernel_features must be an integer")
+        if not 1 <= num_initial_kernel_features <= max_kernel_features:
+            raise ValueError(
+                "num_initial_kernel_features must be between 1 and max_kernel_features"
+            )
+
+        self.kernel_features = {
+            name: np.asarray([], dtype=int) for name in self.kernel.kernel_names
+        }
+        self._sync_features_from_kernels()
+        selected = []
+        history = {}
+
+        step = 0
+        while len(selected) < max_kernel_features:
+            remaining_budget = max_kernel_features - len(selected)
+            if step == 0:
+                addition_target = num_initial_kernel_features
+            else:
+                addition_target = (
+                    1
+                    if addition_factor == 0
+                    else max(
+                        1,
+                        min(
+                            remaining_budget,
+                            int(np.floor(remaining_budget * addition_factor)),
+                        ),
+                    )
+                )
+            ranked_pairs = []
+            for pair in candidates:
+                if pair in selected:
+                    continue
+                proposal = selected + [pair]
+                mapping = {name: [] for name in self.kernel.kernel_names}
+                for name, feature in proposal:
+                    mapping[name].append(feature)
+                self.kernel_features = {
+                    name: np.asarray(values, dtype=int) for name, values in mapping.items()
+                }
+                self._sync_features_from_kernels()
+                self._kernel_configuration_ = None
+                self._tune_member_models(parameter_grid)
+                row = self.mean_performance()
+                score = float(row["score"])
+                ranked_pairs.append((score, pair))
+
+            ranked_pairs.sort(key=lambda item: item[0], reverse=True)
+            additions = [pair for _, pair in ranked_pairs[:addition_target]]
+            selected.extend(additions)
+            mapping = {name: [] for name in self.kernel.kernel_names}
+            for name, feature in selected:
+                mapping[name].append(feature)
+            self.kernel_features = {
+                name: np.asarray(values, dtype=int) for name, values in mapping.items()
+            }
+            self._sync_features_from_kernels()
+            self._kernel_configuration_ = None
+            self._tune_member_models(parameter_grid)
+            row = copy.deepcopy(self.mean_performance())
+            row["num_kernel_features"] = len(selected)
+            row["num_features"] = len(self.features)
+            row["added_kernel"] = tuple(pair[0] for pair in additions)
+            row["added_feature"] = tuple(pair[1] for pair in additions)
+            history[step] = row
+            print(
+                f"Kernel features: {len(selected)}, unique features: {len(self.features)}, "
+                f"Score: {float(row['score']):.3f}"
+            )
+            step += 1
+
+        self.selected_kernel_features_ = tuple(selected)
+        self.kernel_feature_performance_ = history
+        # Keep plotting/reporting utilities useful while making their x-axis
+        # semantics explicit through the additional pair-count column.
+        self.feature_performance_ = history
+        self.fit_unified_model(parameter_grid)
 
     def _update_unified_feature_attributes(self):
         """Refresh ensemble-level feature membership and rank attributes.
@@ -252,9 +510,9 @@ class svmSet:
         if self.separate_feature_sets | self.separate_parameters:
             for i in range(self.num_models):
                 if self.separate_feature_sets:
-                    features = self.features[i]
+                    features = self._kernel_features_for(i)
                 else:
-                    features = self.features
+                    features = self._kernel_features_for()
 
                 if isinstance(self.parameters_, list):
                     parameters = self.parameters_[i].kernel
@@ -271,7 +529,7 @@ class svmSet:
                 )
         else:
             self.kernel_matrix_ = self.kernel.compute(
-                self.cv.X, feature_index=self.features, parameters=self.parameters_.kernel
+                self.cv.X, feature_index=self._kernel_features_for(), parameters=self.parameters_.kernel
             )
 
     def _reset_kernel_matrix(self):
@@ -587,8 +845,9 @@ class svmSet:
         parameter_grid = list(parameter_grid)
         if not parameter_grid:
             raise ValueError("parameter_grid must contain at least one candidate")
-        features = self._ranked_unified_prediction_features()
-        if not len(features):
+        features = self._unified_kernel_features()
+        feature_count = sum(map(len, features.values())) if isinstance(features, dict) else len(features)
+        if not feature_count:
             raise RuntimeError("the unified predictor requires selected features")
 
         best_score = -np.inf
@@ -756,9 +1015,9 @@ class svmSet:
             Precomputed inference kernel with the width expected by libsvm.
         """
         if self.separate_feature_sets:
-            feature_index = self.features[model_index]
+            feature_index = self._kernel_features_for(model_index)
         else:
-            feature_index = self.features
+            feature_index = self._kernel_features_for()
 
         if self.separate_parameters:
             parameters = self.parameters_[model_index].kernel
@@ -855,7 +1114,12 @@ class svmSet:
         else:
             kernel_parameters = parameter_set.kernel
 
-        return (self._freeze_parameter(kernel_parameters), self._freeze_parameter(self.features))
+        feature_state = (
+            self.kernel_features
+            if self.kernel_feature_selection == "independent"
+            else self.features
+        )
+        return (self._freeze_parameter(kernel_parameters), self._freeze_parameter(feature_state))
 
     def _update_parameters(self, parameter_set, update_kernel=True):
         """Apply estimator parameters and optionally rebuild kernels.
@@ -905,6 +1169,10 @@ class svmSet:
         -------
         None
         """
+        if self.kernel_feature_selection == "independent":
+            raise RuntimeError(
+                "use remove_kernel_features() for independent kernel feature selection"
+            )
         self.unified_model_ = None
         self._reset_kernel_matrix()
         self._kernel_configuration_ = None
@@ -956,6 +1224,10 @@ class svmSet:
         -------
         None
         """
+        if self.kernel_feature_selection == "independent":
+            raise RuntimeError(
+                "use set_kernel_features() for independent kernel feature selection"
+            )
         self.unified_model_ = None
         requested = set(np.asarray(features).ravel().tolist())
         ordered = np.asarray(
@@ -2299,6 +2571,7 @@ class svmSet:
         tune_models_each_step=True,
         max_features=None,
         post_find_knee=True,
+        num_initial_medoids=1,
     ):
         """Rank and add feature sets using greedy forward selection.
 
@@ -2316,16 +2589,19 @@ class svmSet:
         ``post_find_knee`` is true, the completed performance curve is used to
         select the knee feature count before that final retuning pass. If the
         curve has no detectable knee, the best-scoring subset is retained.
-        ``addition_factor`` controls the fraction of currently inactive
-        perturbation sets added per iteration. A value of zero adds exactly
-        one set at a time.
+        ``addition_factor`` controls the fraction of the remaining feature
+        budget added per iteration. A value of zero adds exactly one feature
+        set at a time.
+        ``num_initial_medoids`` controls how many of the best candidates from
+        the singleton screening round are fitted together to start the search.
 
         Parameters
         ----------
         parameter_grid : iterable of mistic.utility.paramSet
             Parameter candidates used during tuning.
         addition_factor : float, default=0.1
-            Fraction of inactive groups added per iteration; zero adds one.
+            Fraction of ``max_features - current_features`` targeted for each
+            iteration; zero adds one feature set.
         feature_ranker : callable
             Callable returning addition ranks for a fitted member.
         set_for_rank : str, default="train"
@@ -2336,6 +2612,9 @@ class svmSet:
             Maximum active feature count eligible for the selected model.
         post_find_knee : bool, default=True
             Whether to retain and retune the performance-curve knee.
+        num_initial_medoids : int, default=1
+            Number of medoid candidate perturbation sets used in the initial
+            search model.
 
         Returns
         -------
@@ -2348,12 +2627,25 @@ class svmSet:
             raise TypeError("addition_factor must be numeric")
         if addition_factor < 0:
             raise ValueError("addition_factor must be nonnegative")
+        if isinstance(num_initial_medoids, (bool, np.bool_)) or not isinstance(
+            num_initial_medoids, (int, np.integer)
+        ):
+            raise TypeError("num_initial_medoids must be an integer")
+        if num_initial_medoids < 1:
+            raise ValueError("num_initial_medoids must be at least 1")
 
-        def number_to_add(num_inactive):
-            """Resolve the configured addition fraction to a group count."""
+        def addition_target(current_count):
+            """Return the target number of feature columns for this iteration."""
+            remaining_features = max_features - current_count
             if addition_factor == 0:
                 return 1
-            return max(1, min(num_inactive, int(np.floor(num_inactive * addition_factor))))
+            return max(
+                1,
+                min(
+                    remaining_features,
+                    int(np.floor(remaining_features * addition_factor)),
+                ),
+            )
 
         candidates = [np.asarray(group, dtype=int) for group in self.perturbation_sets]
         if not candidates:
@@ -2378,6 +2670,10 @@ class svmSet:
         ]
         if not eligible_candidates:
             raise ValueError("max_features is smaller than every perturbation set")
+        if num_initial_medoids > len(eligible_candidates):
+            raise ValueError(
+                "num_initial_medoids cannot exceed the number of eligible medoid candidates"
+            )
 
         feature_performance = {}
         singleton_performance = {}
@@ -2413,6 +2709,8 @@ class svmSet:
         try:
             # The first round is deliberately exhaustive rather than based on
             # a perturbation of an unfitted, zero-feature model.
+            singleton_scores = []
+            singleton_states = []
             for candidate_index, candidate in enumerate(eligible_candidates):
                 if self.separate_feature_sets:
                     for model_index in range(self.num_models):
@@ -2422,15 +2720,58 @@ class svmSet:
                 self._tune_member_models(parameter_grid)
                 row = mean_row()
                 singleton_performance[candidate_index] = copy.deepcopy(row)
-                save_state(row)
+                singleton_scores.append(row.score)
+                singleton_states.append(
+                    (
+                        copy.deepcopy(self.models),
+                        copy.deepcopy(self.kernel_matrix_),
+                        copy.deepcopy(self.parameters_),
+                        copy.deepcopy(self.performance_),
+                        copy.deepcopy(self.features),
+                    )
+                )
 
-            self.models, self.kernel_matrix_, self.parameters_, self.performance_, self.features = (
-                copy.deepcopy(best_state)
-            )
-            if self.separate_feature_sets:
-                selection_order = [list(features) for features in self.features]
+            ranked_candidates = np.argsort(-np.asarray(singleton_scores), kind="stable")
+            initial_features = []
+            selected_candidates = []
+            for candidate_index in ranked_candidates:
+                candidate = eligible_candidates[candidate_index]
+                proposed_features = set(initial_features).union(candidate.tolist())
+                if len(proposed_features) > max_features:
+                    continue
+                initial_features.extend(candidate.tolist())
+                selected_candidates.append(int(candidate_index))
+                if len(selected_candidates) == num_initial_medoids:
+                    break
+            if len(selected_candidates) != num_initial_medoids:
+                raise ValueError(
+                    "num_initial_medoids is incompatible with the perturbation sets "
+                    "and max_features"
+                )
+
+            if num_initial_medoids == 1:
+                best_state = copy.deepcopy(singleton_states[selected_candidates[0]])
+                best_score = singleton_scores[selected_candidates[0]]
+                (
+                    self.models,
+                    self.kernel_matrix_,
+                    self.parameters_,
+                    self.performance_,
+                    self.features,
+                ) = copy.deepcopy(best_state)
             else:
-                selection_order = list(self.features)
+                if self.separate_feature_sets:
+                    for model_index in range(self.num_models):
+                        self._set_features(initial_features, model_index, update_kernel=False)
+                else:
+                    self._set_features(initial_features, update_kernel=False)
+                self._tune_member_models(parameter_grid)
+                save_state(mean_row())
+
+            if self.separate_feature_sets:
+                selection_order = [list(initial_features) for _ in range(self.num_models)]
+            else:
+                selection_order = list(initial_features)
             baseline_parameters = copy.deepcopy(self.parameters_)
             initial_count = (
                 np.mean([len(features) for features in self.features])
@@ -2490,16 +2831,18 @@ class svmSet:
                     for model_index in range(self.num_models):
                         model_inactive = self._inactive_perturbation_sets(model_index)
                         ranks = feature_ranker(self, model_index, set_for_rank)
-                        n_to_add = number_to_add(len(model_inactive))
+                        target_features = addition_target(len(self.features[model_index]))
                         ranked = np.argsort(ranks)[::-1]
                         chosen = []
                         feature_count = len(self.features[model_index])
+                        added_features = 0
                         for index in ranked:
-                            if len(chosen) >= n_to_add:
+                            if added_features >= target_features:
                                 break
                             if feature_count + len(model_inactive[index]) <= max_features:
                                 chosen.append(index)
                                 feature_count += len(model_inactive[index])
+                                added_features += len(model_inactive[index])
                         if not chosen:
                             continue
                         additions = np.concatenate([model_inactive[index] for index in chosen])
@@ -2513,16 +2856,18 @@ class svmSet:
                     for model_index in range(self.num_models):
                         rank_total += feature_ranker(self, model_index, set_for_rank)
                     consensus = rank_items(rank_total)
-                    n_to_add = number_to_add(len(inactive))
+                    target_features = addition_target(len(self.features))
                     ranked = np.argsort(consensus)[::-1]
                     chosen = []
                     feature_count = len(self.features)
+                    added_features = 0
                     for index in ranked:
-                        if len(chosen) >= n_to_add:
+                        if added_features >= target_features:
                             break
                         if feature_count + len(inactive[index]) <= max_features:
                             chosen.append(index)
                             feature_count += len(inactive[index])
+                            added_features += len(inactive[index])
                     if not chosen:
                         break
                     additions = np.concatenate([inactive[index] for index in chosen])
@@ -2912,11 +3257,12 @@ class svmSet:
             parameters = self.parameters_.kernel
 
         decision_gradient = np.zeros([len(X), len(current_features)])
+        kernel_features = self._kernel_features_for(model_index)
         for j in range(len(current_features)):
             z = current_features[j]
 
             dK = self.kernel.compute_gradient(
-                support_vectors, feature_index=current_features, wrt=z, parameters=parameters, Y=X
+                support_vectors, feature_index=kernel_features, wrt=z, parameters=parameters, Y=X
             )
 
             decision_gradient[:, j] = np.matmul(self.models[model_index].dual_coef_[0, :], dK)

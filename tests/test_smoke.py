@@ -77,13 +77,20 @@ def test_public_api_and_version():
         "cvSet",
         "BoundaryCounterfactualResult",
         "IntegratedGradientsResult",
+        "MixedKernel",
+        "MixedkernelWrapper",
+        "categorical",
         "kernelWrapper",
+        "integer",
+        "loguniform",
         "paramSet",
+        "parameterSpace",
         "perDiff",
         "score_ocsvm",
         "score_svc",
         "score_svr",
         "svmSet",
+        "uniform",
     }
 
 
@@ -491,8 +498,11 @@ def test_boundary_counterfactuals_are_exposed_and_reused_by_integrated_gradients
 
     ensemble._find_boundary_points = fixed_boundary
     result = ensemble.explain_integrated_gradients(
-        X, feature_names=[f"measurement_{i}" for i in range(X.shape[1])],
-        target=ensemble.cv.y[:4], num_steps=4)
+        X,
+        feature_names=[f"measurement_{i}" for i in range(X.shape[1])],
+        target=ensemble.cv.y[:4],
+        num_steps=4,
+    )
 
     assert isinstance(result.counterfactuals, BoundaryCounterfactualResult)
     assert calls == list(range(ensemble.num_models))
@@ -704,21 +714,19 @@ def test_forward_addition_factor_controls_batch_size():
     one_at_a_time.greedy_forward_selection(
         parameter_grid,
         addition_factor=0,
-        max_features=4,
+        max_features=6,
         post_find_knee=False,
     )
     batched.greedy_forward_selection(
         parameter_grid,
         addition_factor=0.5,
-        max_features=4,
+        max_features=6,
         post_find_knee=False,
     )
 
-    single_counts = [row["num_features"] for row in one_at_a_time.feature_performance_.values()][
-        :-1
-    ]
-    batch_counts = [row["num_features"] for row in batched.feature_performance_.values()][:-1]
-    np.testing.assert_array_equal(single_counts, [1, 2, 3, 4])
+    single_counts = [row["num_features"] for row in one_at_a_time.feature_performance_.values()]
+    batch_counts = [row["num_features"] for row in batched.feature_performance_.values()]
+    np.testing.assert_array_equal(single_counts, [1, 2, 3, 4, 5, 6])
     assert batch_counts[1] - batch_counts[0] > 1
 
 
@@ -730,6 +738,43 @@ def test_forward_addition_factor_validates_input():
         ensemble.greedy_forward_selection(parameter_grid, addition_factor=-0.1)
     with np.testing.assert_raises(TypeError):
         ensemble.greedy_forward_selection(parameter_grid, addition_factor="many")
+
+
+def test_forward_selection_can_start_with_multiple_medoids():
+    ensemble = _fitted_ensemble()
+    parameter_grid = [paramSet({"C": 1.0}, {})]
+
+    ensemble.greedy_forward_selection(
+        parameter_grid,
+        addition_factor=0,
+        num_initial_medoids=3,
+        max_features=5,
+        post_find_knee=False,
+    )
+
+    feature_counts = [row["num_features"] for row in ensemble.feature_performance_.values()]
+    assert feature_counts[:-1] == [3, 4, 5]
+    assert feature_counts[-1] == ensemble.cv.X.shape[1]
+    assert len(ensemble.singleton_performance_) == ensemble.cv.X.shape[1]
+
+
+def test_forward_selection_validates_initial_medoid_count():
+    ensemble = _fitted_ensemble()
+    parameter_grid = [paramSet({"C": 1.0}, {})]
+
+    for invalid_count in (0, ensemble.cv.X.shape[1] + 1):
+        with np.testing.assert_raises(ValueError):
+            ensemble.greedy_forward_selection(
+                parameter_grid,
+                num_initial_medoids=invalid_count,
+                post_find_knee=False,
+            )
+    with np.testing.assert_raises(TypeError):
+        ensemble.greedy_forward_selection(
+            parameter_grid,
+            num_initial_medoids=1.5,
+            post_find_knee=False,
+        )
 
 
 def test_forward_singleton_round_uses_only_feature_medoids():

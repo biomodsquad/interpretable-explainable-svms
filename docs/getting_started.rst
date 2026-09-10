@@ -94,6 +94,67 @@ configured with ``kernel="precomputed"``.
    model.tune_models(grid)
    print(model.mean_performance())
 
+Space-filling parameter search
+------------------------------
+
+For continuous hyperparameters, a Latin hypercube provides broader coverage
+than a similarly sized regular grid. Positive scale parameters such as ``C``
+and ``gamma`` should generally be sampled logarithmically.
+
+.. code-block:: python
+
+   from mistic import loguniform, parameterSpace
+
+   grid = parameterSpace(
+       model={"C": loguniform(1e-3, 1e3)},
+       kernel={"gamma": loguniform(1e-6, 1e1)},
+   ).sample(
+       n_trials=24,
+       strategy="latin_hypercube",
+       random_state=7,
+   )
+
+   model.tune_models(grid)
+
+Use ``uniform`` for linear continuous ranges, ``integer`` for inclusive
+integer ranges, and ``categorical`` for discrete choices. Plain values in a
+parameter space are held fixed. Discrete duplicate candidates are removed,
+so the returned list can contain fewer entries than ``n_trials``.
+
+Independent mixed-kernel features
+---------------------------------
+
+A mixed kernel can select assignments independently, so removing a feature
+from one base kernel does not remove it from another::
+
+   from mistic import MixedKernel
+
+   mixed = MixedKernel.weighted_sum(
+       [
+           kernelWrapper("linear", name="linear"),
+           kernelWrapper("rbf", name="radial"),
+       ],
+       weight_parameters=["linear_weight", "radial_weight"],
+   )
+   model = svmSet(
+       estimator,
+       splits,
+       score_method=score_svc().score,
+       kernel=mixed,
+       kernel_feature_selection="independent",
+   )
+   model.remove_kernel_features("radial", [2, 5])
+   model.add_kernel_features("linear", [2])
+
+Use ``greedy_forward_kernel_selection(grid, max_kernel_features=10,
+num_initial_kernel_features=1, addition_factor=0.3)`` to select
+``(kernel, feature)`` pairs automatically. The initial parameter controls the
+first screened batch independently. After that, the addition factor is
+computed from the remaining distance to the maximum pair count; zero adds
+exactly one pair per later iteration. The resulting
+``kernel_features`` mapping records the assignments, while ``features``
+remains the union of original input columns for reporting and explanations.
+
 Next steps
 ----------
 

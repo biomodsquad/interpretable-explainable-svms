@@ -19,6 +19,13 @@ These objects are available directly from :mod:`mistic`.
    mistic.combined_rank
    mistic.cvSet
    mistic.kernelWrapper
+   mistic.MixedKernel
+   mistic.MixedkernelWrapper
+   mistic.parameterSpace
+   mistic.uniform
+   mistic.loguniform
+   mistic.integer
+   mistic.categorical
    mistic.paramSet
    mistic.perDiff
    mistic.score_ocsvm
@@ -55,4 +62,10 @@ Utilities
 ---------
 
 .. automodule:: mistic.utility
+   :members:
+
+Mixed kernels
+-------------
+
+.. automodule:: mistic.mixed_kernel
    :members:
