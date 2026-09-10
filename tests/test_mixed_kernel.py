@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 from sklearn.datasets import load_breast_cancer
@@ -367,3 +368,33 @@ def test_single_kernel_is_normalized_to_weight_one_mixed_kernel():
     assert isinstance(ensemble.kernel, MixedKernel)
     assert len(ensemble.kernel.base_kernels) == 1
     assert ensemble.kernel_feature_selection == "independent"
+
+
+def test_mixed_performance_knee_uses_and_restores_selection_feature_count():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:50, :2], y[:50])
+    splits.classification(num_sets=2)
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=kernelWrapper("linear", name="linear")
+        + kernelWrapper("rbf", name="radial"),
+    )
+    ensemble.feature_performance_ = {
+        0: {"num_features": 1, "num_selection_features": 1, "score": 0.5,
+            "selection_units": (0,)},
+        1: {"num_features": 2, "num_selection_features": 2, "score": 0.9,
+            "selection_units": (0, 1)},
+        2: {"num_features": 2, "num_selection_features": 3, "score": 1.0,
+            "selection_units": (0, 1, 2)},
+    }
+
+    ensemble.plot_performance()
+    np.testing.assert_array_equal(plt.gca().lines[-1].get_xdata(), [1, 2, 3])
+    assert ensemble.find_knee() == 2
+    assert ensemble.knee_count_ == "num_selection_features"
+
+    ensemble.tune_models = lambda parameter_grid: None
+    ensemble.set_num_selection_features(2, [])
+    assert ensemble.selection_state_.active == frozenset({0, 1})

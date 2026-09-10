@@ -611,6 +611,7 @@ class svmSet:
         num_initial_kernel_features,
         feature_ranker,
         set_for_rank,
+        post_find_knee=False,
     ):
         """Run sensitivity-ranked forward selection over kernel-aware units."""
         if not isinstance(addition_factor, (int, float, np.integer, np.floating)):
@@ -664,7 +665,9 @@ class svmSet:
             row = copy.deepcopy(self.mean_performance())
             units = [self.selection_space_[index] for index in selected]
             row["num_kernel_features"] = sum(len(unit.features) for unit in units)
+            row["num_selection_features"] = row["num_kernel_features"]
             row["num_features"] = len(self.features)
+            row["selection_units"] = tuple(selected)
             additions = selected if step == 0 else last_additions
             row["added_kernel"] = tuple(
                 self.selection_space_[index].kernel_id for index in additions
@@ -717,14 +720,27 @@ class svmSet:
         )
         self.kernel_feature_performance_ = history
         self.feature_performance_ = history
-        self.fit_unified_model(parameter_grid)
+        if post_find_knee:
+            try:
+                knee = self.find_knee(count="num_selection_features")
+            except ValueError as error:
+                warnings.warn(
+                    f"Could not select a post-search knee ({error}); retaining the final state.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            else:
+                self.set_num_selection_features(knee, parameter_grid)
+        if self.unified_model_ is None:
+            self.fit_unified_model(parameter_grid)
         if previous_direction is None:
             self.__dict__.pop("_selection_direction_", None)
         else:
             self._selection_direction_ = previous_direction
 
     def _selection_unit_backward_selection(
-        self, parameter_grid, reduction_factor, feature_ranker, set_for_rank
+        self, parameter_grid, reduction_factor, feature_ranker, set_for_rank,
+        post_find_knee=False,
     ):
         """Run backward selection over kernel/perturbation units."""
         if not isinstance(reduction_factor, (int, float, np.integer, np.floating)):
@@ -754,7 +770,9 @@ class svmSet:
                 active = sorted(self.selection_state_.active)
                 units = [self.selection_space_[index] for index in active]
                 row["num_kernel_features"] = sum(len(unit.features) for unit in units)
+                row["num_selection_features"] = row["num_kernel_features"]
                 row["num_features"] = len(self.features)
+                row["selection_units"] = tuple(active)
                 history[step] = row
                 if float(row["score"]) >= best_score:
                     best_score = float(row["score"])
@@ -785,7 +803,6 @@ class svmSet:
                 self._selection_direction_ = previous_direction
 
         self.set_selection_units(best_active, update_kernel=False)
-        self.tune_models(parameter_grid)
         self.selection_unit_removal_order_ = tuple(removal_order)
         self.selected_selection_units_ = tuple(sorted(best_active))
         self.selected_kernel_features_ = tuple(
@@ -795,6 +812,20 @@ class svmSet:
         )
         self.kernel_feature_performance_ = history
         self.feature_performance_ = history
+        if post_find_knee:
+            try:
+                knee = self.find_knee(count="num_selection_features")
+            except ValueError as error:
+                warnings.warn(
+                    f"Could not select a post-search knee ({error}); retaining the best state.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                self.tune_models(parameter_grid)
+            else:
+                self.set_num_selection_features(knee, parameter_grid)
+        else:
+            self.tune_models(parameter_grid)
         if self.unified_model_ is None:
             self.fit_unified_model(parameter_grid)
 
@@ -2701,6 +2732,40 @@ class svmSet:
 
         self.tune_models(parameter_grid)
 
+    def set_num_selection_features(self, count, parameter_grid, metric="score"):
+        """Restore and retune an exact kernel-aware state from a search curve.
+
+        ``count`` is the number of kernel-feature assignments, so the same
+        original column assigned to two kernels counts twice. If several
+        recorded states have that count, the state with the greatest
+        ``metric`` is restored.
+        """
+        if not hasattr(self, "feature_performance_"):
+            raise RuntimeError("feature selection must be run before restoring a state")
+        if isinstance(count, (bool, np.bool_)) or not isinstance(count, (int, np.integer)):
+            raise TypeError("count must be an integer")
+        candidates = [
+            row
+            for row in self.feature_performance_.values()
+            if row.get("num_selection_features") == count and "selection_units" in row
+        ]
+        if not candidates:
+            raise ValueError(f"no recorded selection state has {count} selection features")
+        try:
+            selected = max(candidates, key=lambda row: row[metric])
+        except KeyError as error:
+            raise KeyError(f"feature performance does not contain {metric!r}") from error
+        self.set_selection_units(selected["selection_units"], update_kernel=False)
+        self.selected_selection_units_ = tuple(selected["selection_units"])
+        self.selected_kernel_features_ = tuple(
+            (unit.kernel_id, feature)
+            for unit in (
+                self.selection_space_[index] for index in self.selected_selection_units_
+            )
+            for feature in unit.features
+        )
+        self.tune_models(parameter_grid)
+
     # ------------------------------------------------------------------
     # Deterministic greedy feature selection
     # ------------------------------------------------------------------
@@ -2754,6 +2819,7 @@ class svmSet:
                 reduction_factor,
                 combined_rank().compute if feature_ranker is None else feature_ranker,
                 set_for_rank,
+                post_find_knee,
             )
 
         if feature_ranker is None:
@@ -3027,6 +3093,7 @@ class svmSet:
                 num_initial_medoids,
                 ranker,
                 set_for_rank,
+                post_find_knee,
             )
         if feature_ranker is None:
             feature_ranker = combined_rank().compute
@@ -4058,27 +4125,43 @@ class svmSet:
             counterfactuals=counterfactuals,
         )
 
-    def plot_performance(self, metric="score"):
+    def plot_performance(self, metric="score", count=None):
         """Plot a selection metric against the retained feature count.
 
         Parameters
         ----------
         metric : str, default="score"
             Key in each ``feature_performance_`` row to plot.
+        count : {"num_features", "num_selection_features"} or None, default=None
+            Horizontal-axis count. The default uses kernel-feature assignment
+            count when available and otherwise uses unique original columns.
 
         Returns
         -------
         None
             Adds a line to the current Matplotlib axes.
         """
-        x = [self.feature_performance_[key]["num_features"] for key in self.feature_performance_]
+        rows = list(self.feature_performance_.values())
+        if count is None:
+            count = (
+                "num_selection_features"
+                if rows and all("num_selection_features" in row for row in rows)
+                else "num_features"
+            )
+        if count not in {"num_features", "num_selection_features"}:
+            raise ValueError("count must be 'num_features' or 'num_selection_features'")
+        x = [row[count] for row in rows]
         y = [self.feature_performance_[key][metric] for key in self.feature_performance_]
 
         plt.plot(x, y)
-        plt.xlabel("# of features")
+        plt.xlabel(
+            "# of kernel-feature assignments"
+            if count == "num_selection_features"
+            else "# of unique features"
+        )
         plt.ylabel(metric)
 
-    def find_knee(self, metric="score"):
+    def find_knee(self, metric="score", count=None):
         """Return the feature count at the knee of a performance curve.
 
         The curve is sorted by feature count and normalized to the unit
@@ -4091,6 +4174,9 @@ class svmSet:
         metric : str, default="score"
             Higher-is-better performance value stored in each row of
             ``feature_performance_``.
+        count : {"num_features", "num_selection_features"} or None, default=None
+            Count used for the curve. The default prefers selection-feature
+            assignments when present.
 
         Returns
         -------
@@ -4101,9 +4187,18 @@ class svmSet:
         if not hasattr(self, "feature_performance_"):
             raise RuntimeError("feature selection must be run before finding a knee")
 
+        rows = list(self.feature_performance_.values())
+        if count is None:
+            count = (
+                "num_selection_features"
+                if rows and all("num_selection_features" in row for row in rows)
+                else "num_features"
+            )
+        if count not in {"num_features", "num_selection_features"}:
+            raise ValueError("count must be 'num_features' or 'num_selection_features'")
         try:
             points = np.asarray(
-                [(row["num_features"], row[metric]) for row in self.feature_performance_.values()],
+                [(row[count], row[metric]) for row in rows],
                 dtype=float,
             )
         except KeyError as error:
@@ -4141,6 +4236,9 @@ class svmSet:
         if knee.is_integer():
             knee = int(knee)
         self.knee_num_features_ = knee
+        self.knee_count_ = count
+        if count == "num_selection_features":
+            self.knee_num_selection_features_ = knee
         return knee
 
     def predict(self, X, model_index=None, use_voting=False, prediction_mode="unified"):
