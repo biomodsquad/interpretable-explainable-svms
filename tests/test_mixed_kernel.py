@@ -161,6 +161,54 @@ def test_svmset_removes_feature_from_only_one_kernel_and_predicts():
     assert np.all(np.isfinite(gradient))
 
 
+def test_selection_units_keep_kernel_perturbation_sets_independent():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:60, :3], y[:60])
+    splits.classification(num_sets=2)
+    mixed = kernelWrapper("linear", name="linear") + kernelWrapper("rbf", name="radial")
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=mixed,
+        kernel_feature_selection="independent",
+        perturbation_sets=[[0, 1], [2]],
+    )
+    radial_group = next(
+        index
+        for index, unit in enumerate(ensemble.selection_space_)
+        if unit.kernel_id == "radial" and unit.features == (0, 1)
+    )
+
+    ensemble.remove_selection_units([radial_group], update_kernel=False)
+
+    np.testing.assert_array_equal(ensemble.kernel_features["linear"], [0, 1, 2])
+    np.testing.assert_array_equal(ensemble.kernel_features["radial"], [2])
+    np.testing.assert_array_equal(ensemble.features, [0, 1, 2])
+
+
+def test_selection_state_is_separate_for_each_fold_when_requested():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:60, :2], y[:60])
+    splits.classification(num_sets=2)
+    mixed = kernelWrapper("linear", name="linear") + kernelWrapper("rbf", name="radial")
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=mixed,
+        kernel_feature_selection="independent",
+        separate_feature_sets=True,
+    )
+
+    ensemble.remove_selection_units([0], model_index=0, update_kernel=False)
+
+    assert 0 not in ensemble.selection_state_[0].active
+    assert 0 in ensemble.selection_state_[1].active
+    assert 0 not in ensemble.kernel_features[0]["linear"]
+    assert 0 in ensemble.kernel_features[1]["linear"]
+
+
 def test_forward_kernel_selection_chooses_kernel_feature_pairs():
     X, y = load_breast_cancer(return_X_y=True)
     X, y = X[:60, :3], y[:60]

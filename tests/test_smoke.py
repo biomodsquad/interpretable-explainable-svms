@@ -79,6 +79,8 @@ def test_public_api_and_version():
         "IntegratedGradientsResult",
         "MixedKernel",
         "MixedkernelWrapper",
+        "KernelFeatureSelectionState",
+        "KernelFeatureSet",
         "categorical",
         "kernelWrapper",
         "integer",

@@ -20,6 +20,8 @@ These objects are available directly from :mod:`mistic`.
    mistic.cvSet
    mistic.kernelWrapper
    mistic.MixedKernel
+   mistic.KernelFeatureSet
+   mistic.KernelFeatureSelectionState
    mistic.MixedkernelWrapper
    mistic.parameterSpace
    mistic.uniform

@@ -4,6 +4,7 @@ from .cvSet import cvSet
 from .explanations import BoundaryCounterfactualResult, IntegratedGradientsResult
 from .mixed_kernel import MixedKernel, MixedkernelWrapper
 from .parameter_space import categorical, integer, loguniform, parameterSpace, uniform
+from .selection import KernelFeatureSelectionState, KernelFeatureSet
 from .svmSet import svmSet
 from .utility import (
     combined_rank,
@@ -22,6 +23,8 @@ __all__ = [
     "IntegratedGradientsResult",
     "MixedKernel",
     "MixedkernelWrapper",
+    "KernelFeatureSelectionState",
+    "KernelFeatureSet",
     "categorical",
     "combined_rank",
     "cvSet",

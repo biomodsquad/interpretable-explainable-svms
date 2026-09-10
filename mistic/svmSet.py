@@ -13,6 +13,7 @@ from sklearn.metrics import brier_score_loss, f1_score, r2_score, roc_auc_score
 from sklearn.svm import SVR, OneClassSVM
 
 from mistic.explanations import BoundaryCounterfactualResult, IntegratedGradientsResult
+from mistic.selection import KernelFeatureSelectionState, KernelFeatureSet
 from mistic.utility import (
     combined_rank,
     dotdict,
@@ -158,6 +159,7 @@ class svmSet:
                 if self.separate_feature_sets
                 else initial
             )
+        self._initialize_selection_state()
         self._reset_kernel_matrix()
         self._kernel_configuration_ = None
 
@@ -215,7 +217,101 @@ class svmSet:
             self.unified_prediction_features_ = None
         if "kernel_feature_selection" not in self.__dict__:
             self.kernel_feature_selection = "shared"
+        if "selection_space_" not in self.__dict__:
+            self._initialize_selection_state()
         self._update_unified_feature_attributes()
+
+    def _selection_kernel_features(self):
+        """Return the eligible input columns for each kernel identifier."""
+        from .mixed_kernel import MixedKernel
+
+        if isinstance(self.kernel, MixedKernel):
+            return self._initial_kernel_features()
+        return {"kernel0": np.arange(self.cv.X.shape[1], dtype=int)}
+
+    def _initialize_selection_state(self):
+        """Create immutable kernel/perturbation units and initially activate all."""
+        eligible = self._selection_kernel_features()
+        units = []
+        for kernel_id, allowed in eligible.items():
+            allowed = set(np.asarray(allowed, dtype=int).tolist())
+            for group_index, group in enumerate(self.perturbation_sets):
+                # A mixed-kernel leaf may have an eligibility mask. Retain the
+                # eligible portion so every unit remains directly executable.
+                features = tuple(int(feature) for feature in group if feature in allowed)
+                if features:
+                    units.append(
+                        KernelFeatureSet(kernel_id, features, name=f"group_{group_index}")
+                    )
+        self.selection_space_ = tuple(units)
+        initial = KernelFeatureSelectionState.all_active(self.selection_space_)
+        self.selection_state_ = (
+            [initial for _ in range(self.num_models)]
+            if self.separate_feature_sets
+            else initial
+        )
+
+    def _selection_state_for(self, model_index=None):
+        """Return one member's state, validating member-specific access."""
+        if self.separate_feature_sets:
+            if model_index is None:
+                raise ValueError("model_index is required for separate feature sets")
+            if not 0 <= model_index < self.num_models:
+                raise IndexError("model_index is out of range")
+            return self.selection_state_[model_index]
+        if model_index is not None:
+            raise ValueError("model_index is only valid for separate feature sets")
+        return self.selection_state_
+
+    def set_selection_units(self, indices, model_index=None, update_kernel=True):
+        """Activate exactly the indexed kernel/perturbation units.
+
+        This is the kernel-aware primitive for feature selection. Existing
+        ``features`` and ``kernel_features`` attributes remain synchronized as
+        compatibility views.
+        """
+        state = self._selection_state_for(model_index).only(indices)
+        if self.separate_feature_sets:
+            self.selection_state_[model_index] = state
+        else:
+            self.selection_state_ = state
+
+        if self.kernel_feature_selection == "independent":
+            mapping = {
+                name: np.asarray(values, dtype=int).copy()
+                for name, values in state.kernel_features.items()
+            }
+            if self.separate_feature_sets:
+                self.kernel_features[model_index] = mapping
+            else:
+                self.kernel_features = mapping
+            self._sync_features_from_kernels()
+        else:
+            values = state.features.copy()
+            if self.separate_feature_sets:
+                self.features[model_index] = values
+            else:
+                self.features = values
+            self._update_unified_feature_attributes()
+
+        self.unified_model_ = None
+        self._kernel_configuration_ = None
+        if update_kernel and hasattr(self, "parameters_"):
+            self._reset_kernel_matrix()
+            self._update_kernel_matrix()
+            self._kernel_configuration_ = self._kernel_configuration(self.parameters_)
+
+    def add_selection_units(self, indices, model_index=None, update_kernel=True):
+        """Activate selection units without changing other active units."""
+        state = self._selection_state_for(model_index)
+        self.set_selection_units(state.active.union(map(int, indices)), model_index, update_kernel)
+
+    def remove_selection_units(self, indices, model_index=None, update_kernel=True):
+        """Deactivate selection units without changing other active units."""
+        state = self._selection_state_for(model_index)
+        self.set_selection_units(
+            state.active.difference(map(int, indices)), model_index, update_kernel
+        )
 
     def _initial_kernel_features(self):
         """Return all eligible input features for every mixed-kernel leaf."""
@@ -278,32 +374,46 @@ class svmSet:
         values = np.asarray(features, dtype=int)
         if values.ndim != 1 or np.any(values < 0) or np.any(values >= self.cv.X.shape[1]):
             raise ValueError("kernel features must be valid one-dimensional column indices")
-        mapping = self.kernel_features[model_index] if self.separate_feature_sets else self.kernel_features
-        mapping[kernel_name] = np.unique(values)
-        self.unified_model_ = None
-        self._kernel_configuration_ = None
-        self._sync_features_from_kernels()
-        if update_kernel and hasattr(self, "parameters_"):
-            self._reset_kernel_matrix()
-            self._update_kernel_matrix()
-            self._kernel_configuration_ = self._kernel_configuration(self.parameters_)
+        requested = set(values.tolist())
+        state = self._selection_state_for(model_index)
+        retained = {
+            index
+            for index in state.active
+            if state.selection_space[index].kernel_id != kernel_name
+        }
+        retained.update(
+            index
+            for index, unit in enumerate(state.selection_space)
+            if unit.kernel_id == kernel_name and set(unit.features).issubset(requested)
+        )
+        self.set_selection_units(retained, model_index, update_kernel)
 
     def remove_kernel_features(self, kernel_name, features, model_index=None, update_kernel=True):
         """Remove features from exactly one base kernel."""
         if self.separate_feature_sets and model_index is None:
             raise ValueError("model_index is required for separate kernel feature sets")
-        mapping = self.kernel_features[model_index] if self.separate_feature_sets else self.kernel_features
-        retained = np.asarray(mapping[kernel_name], dtype=int)
-        retained = retained[~np.isin(retained, np.asarray(features, dtype=int))]
-        self.set_kernel_features(kernel_name, retained, model_index, update_kernel)
+        removed = set(np.asarray(features, dtype=int).tolist())
+        state = self._selection_state_for(model_index)
+        retained = {
+            index
+            for index in state.active
+            if state.selection_space[index].kernel_id != kernel_name
+            or removed.isdisjoint(state.selection_space[index].features)
+        }
+        self.set_selection_units(retained, model_index, update_kernel)
 
     def add_kernel_features(self, kernel_name, features, model_index=None, update_kernel=True):
         """Add features to exactly one base kernel."""
         if self.separate_feature_sets and model_index is None:
             raise ValueError("model_index is required for separate kernel feature sets")
-        mapping = self.kernel_features[model_index] if self.separate_feature_sets else self.kernel_features
-        expanded = np.concatenate((np.asarray(mapping[kernel_name], dtype=int), np.asarray(features, dtype=int)))
-        self.set_kernel_features(kernel_name, expanded, model_index, update_kernel)
+        added = set(np.asarray(features, dtype=int).tolist())
+        state = self._selection_state_for(model_index)
+        indices = state.active.union(
+            index
+            for index, unit in enumerate(state.selection_space)
+            if unit.kernel_id == kernel_name and not added.isdisjoint(unit.features)
+        )
+        self.set_selection_units(indices, model_index, update_kernel)
 
     def greedy_forward_kernel_selection(
         self,
