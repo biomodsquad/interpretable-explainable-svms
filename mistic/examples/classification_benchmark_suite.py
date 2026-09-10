@@ -58,6 +58,7 @@ class DatasetSpec:
 
 @dataclass(frozen=True)
 class BenchmarkConfig:
+    dataset_version: str = "permuted_signal_columns_v1"
     sample_sizes: tuple[int, ...] = (50, 100, 250, 500, 1000)
     feature_counts: tuple[int, ...] = (100, 250, 500)
     scenarios: tuple[str, ...] = (
@@ -159,8 +160,17 @@ def make_dataset(spec):
             n_samples=spec.n_samples, n_features=spec.n_features,
             n_repeated=0, n_classes=2, shuffle=False,
             random_state=spec.data_seed, **settings)
-    feature_names = np.asarray([f"x{index:04d}" for index in range(spec.n_features)])
-    signal_mask = np.arange(spec.n_features) < spec.n_signal
+    # Keep signal location from becoming an index-order cue. The separate RNG
+    # makes the permutation reproducible without depending on how many random
+    # values a particular scenario consumed while generating observations.
+    original_names = np.asarray([f"x{index:04d}" for index in range(spec.n_features)])
+    original_signal_mask = np.arange(spec.n_features) < spec.n_signal
+    permutation = np.random.default_rng(spec.data_seed + 104729).permutation(
+        spec.n_features
+    )
+    X = X[:, permutation]
+    feature_names = original_names[permutation]
+    signal_mask = original_signal_mask[permutation]
     return pd.DataFrame(X, columns=feature_names), pd.Series(y), signal_mask
 
 
