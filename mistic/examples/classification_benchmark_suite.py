@@ -364,11 +364,13 @@ class MisticClassifier:
                 self.config.mistic_max_kernel_features,
                 len(kernel.base_kernels) * len(splits.feature_medoids_),
             )
-            self.ensemble_.greedy_forward_kernel_selection(
+            self.ensemble_.greedy_forward_selection(
                 parameter_grid=grid,
-                max_kernel_features=pair_budget,
+                max_features=pair_budget,
                 addition_factor=self.config.mistic_addition_factor,
-                num_initial_kernel_features=self.config.mistic_num_initial_kernel_features,
+                num_initial_medoids=self.config.mistic_num_initial_kernel_features,
+                feature_ranker=combined_rank(
+                    weight=self.config.mistic_rank_weight).compute,
             )
         else:
             self.ensemble_.greedy_forward_selection(

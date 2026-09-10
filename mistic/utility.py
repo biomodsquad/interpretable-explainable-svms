@@ -16,7 +16,7 @@ from sklearn.metrics.pairwise import pairwise_kernels
 
 
 class combined_rank:
-    """Blend perturbation and frozen-objective feature rankings.
+    """Blend perturbation and frozen-objective selection-unit rankings.
 
     Parameters
     ----------
@@ -66,8 +66,21 @@ class combined_rank:
         Returns
         -------
         numpy.ndarray
-            Zero-based consensus rank for each feature.
+            Zero-based consensus rank for each candidate kernel/perturbation
+            unit. For legacy shared selection this is one rank per feature
+            perturbation set.
         """
+        if svmSet.kernel_feature_selection == "independent":
+            contribution = svmSet.selection_unit_contribution_(model_index, set_for_rank)
+            importance = svmSet.selection_unit_importance_(model_index)
+            if len(contribution) != len(importance):
+                raise RuntimeError("selection-unit contribution and importance are misaligned")
+            contribution_rank = rank_items(contribution)
+            feature_rank = rank_items(importance)
+            return rank_items(
+                self.weight * contribution_rank + (1 - self.weight) * feature_rank
+            )
+
         if set_for_rank == "sample":
             np.random.seed(self.random_seed)
             X_for_rank = np.zeros([self.number_samples, svmSet.cv.X.shape[1]])

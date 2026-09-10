@@ -146,12 +146,13 @@ from one base kernel does not remove it from another::
    model.remove_kernel_features("radial", [2, 5])
    model.add_kernel_features("linear", [2])
 
-Use ``greedy_forward_kernel_selection(grid, max_kernel_features=10,
-num_initial_kernel_features=1, addition_factor=0.3)`` to select
-``(kernel, feature)`` pairs automatically. The initial parameter controls the
+Use ``greedy_forward_selection(grid, max_features=10,
+num_initial_medoids=1, addition_factor=0.3)`` to select kernel/perturbation
+units automatically. ``combined_rank`` works for both one-leaf and mixed
+kernels and combines frozen-model contribution and objective importance. The initial parameter controls the
 first screened batch independently. After that, the addition factor is
-computed from the remaining distance to the maximum pair count; zero adds
-exactly one pair per later iteration. The resulting
+computed from the remaining distance to the maximum kernel-feature count;
+zero adds exactly one unit per later iteration. The resulting
 ``kernel_features`` mapping records the assignments, while ``features``
 remains the union of original input columns for reporting and explanations.
 

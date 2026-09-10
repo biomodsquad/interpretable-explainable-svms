@@ -323,3 +323,47 @@ def test_forward_kernel_selection_validates_addition_factor():
             grid,
             num_initial_kernel_features=1.5,
         )
+
+
+def test_unified_forward_and_backward_selection_support_mixed_kernel_units():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:70, :2], y[:70])
+    splits.classification(num_sets=2)
+    grid = [paramSet({"C": 1.0}, {"gamma": 0.001})]
+    mixed = kernelWrapper("linear", name="linear") + kernelWrapper("rbf", name="radial")
+
+    forward = svmSet(
+        SVC(kernel="precomputed"), splits, score_svc().score, kernel=mixed
+    )
+    forward.greedy_forward_selection(
+        grid, max_features=2, addition_factor=0, post_find_knee=False
+    )
+    assert len(forward.selected_selection_units_) == 2
+    assert sum(map(len, forward.kernel_features.values())) == 2
+
+    backward = svmSet(
+        SVC(kernel="precomputed"), splits, score_svc().score, kernel=mixed
+    )
+    backward.greedy_backward_selection(
+        grid, reduction_factor=0.5, post_find_knee=False
+    )
+    assert backward.selected_selection_units_
+    assert backward.selection_state_.active == frozenset(
+        backward.selected_selection_units_
+    )
+
+
+def test_single_kernel_is_normalized_to_weight_one_mixed_kernel():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:50, :2], y[:50])
+    splits.classification(num_sets=2)
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=kernelWrapper("linear"),
+    )
+
+    assert isinstance(ensemble.kernel, MixedKernel)
+    assert len(ensemble.kernel.base_kernels) == 1
+    assert ensemble.kernel_feature_selection == "independent"
