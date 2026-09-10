@@ -163,6 +163,22 @@ def test_cv_feature_medoids_are_deterministic_and_validate_count():
         cvSet(X, np.arange(30), num_feature_medoids=2.5)
 
 
+def test_cv_feature_clustering_returns_a_deterministic_partition():
+    rng = np.random.default_rng(13)
+    X = rng.normal(size=(30, 12))
+    first_medoids, first_groups = cvSet.cluster_features(X, 4)
+    second_medoids, second_groups = cvSet.cluster_features(X, 4)
+
+    np.testing.assert_array_equal(first_medoids, second_medoids)
+    assert len(first_groups) == 4
+    np.testing.assert_array_equal(
+        np.sort(np.concatenate(first_groups)), np.arange(X.shape[1])
+    )
+    for index, group in enumerate(first_groups):
+        np.testing.assert_array_equal(group, second_groups[index])
+        assert first_medoids[index] in group
+
+
 def test_cv_ensemble_validation_set_is_excluded_from_all_splits():
     X, y = load_breast_cancer(return_X_y=True)
     X = X[:100, :6]

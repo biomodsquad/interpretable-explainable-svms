@@ -69,7 +69,7 @@ class BenchmarkConfig:
     mistic_members: int = 5
     mistic_rank_weight: float = 0.90
     mistic_feature_fraction: float = 0.20
-    mistic_num_feature_medoids: int | None = None
+    mistic_num_perturbation_clusters: int = 40
     mistic_max_features: int | None = None
     mistic_class_weight: bool = True
     mistic_tune_models_each_step: bool = False
@@ -83,7 +83,6 @@ class BenchmarkConfig:
     mistic_c_bounds: tuple[float, float] = (0.25, 8.0)
     mistic_gamma_bounds: tuple[float, float] = (2**-9, 2**-1)
     mistic_mixed_linear_weights: tuple[float, ...] = (0.25, 0.5, 0.75)
-    mistic_max_candidate_features: int = 5
     mistic_max_selection_features: int = 5
     mistic_num_initial_selection_units: int = 1
     random_seed: int = 42
@@ -333,31 +332,28 @@ class MisticClassifier:
         feature_budget = max(
             1, int(round(self.config.mistic_feature_fraction * X.shape[1])))
         self.feature_budget_ = feature_budget
-        num_feature_medoids = (
-            feature_budget if self.config.mistic_num_feature_medoids is None
-            else min(X.shape[1], self.config.mistic_num_feature_medoids)
+        num_feature_medoids = min(
+            X.shape[1], self.config.mistic_num_perturbation_clusters
         )
         independent = getattr(self, "independent_kernel_features", False)
-        if independent:
-            num_feature_medoids = min(
-                num_feature_medoids,
-                self.config.mistic_max_candidate_features,
-            )
         max_features = (
             feature_budget if self.config.mistic_max_features is None
             else min(X.shape[1], self.config.mistic_max_features)
         )
         self.num_feature_medoids_ = num_feature_medoids
         self.max_features_ = max_features
+        cluster_medoids, perturbation_sets = cvSet.cluster_features(
+            scaled, num_feature_medoids
+        )
         splits = cvSet(scaled, np.asarray(y), num_feature_medoids=num_feature_medoids,
                        ensemble_validation_size=0.0)
+        # Use the same preprocessing clusters both as selectable perturbation
+        # units and as the representative candidates that seed forward search.
+        splits.feature_medoids_ = cluster_medoids
         splits.classification(
             num_sets=self.config.mistic_members, validation_size=0.20,
             random_seed=self.seed)
         kernel, grid = self._kernel_and_grid()
-        if independent:
-            for base_kernel in kernel.base_kernels:
-                base_kernel.features = splits.feature_medoids_.copy()
         self.ensemble_ = svmSet(
             SVC(
                 kernel="precomputed",
@@ -368,6 +364,7 @@ class MisticClassifier:
             separate_feature_sets=not independent,
             separate_parameters=False,
             kernel_feature_selection="independent" if independent else "shared",
+            perturbation_sets=perturbation_sets,
         )
         if independent:
             pair_budget = min(

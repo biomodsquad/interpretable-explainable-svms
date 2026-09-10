@@ -211,12 +211,28 @@ class cvSet:
         numpy.ndarray
             Sorted feature-column indices of the selected medoids.
         """
+        medoids, _ = cvSet.cluster_features(X, num_medoids, max_iter=max_iter)
+        return medoids
+
+    @staticmethod
+    def cluster_features(X, num_clusters, max_iter=100):
+        """Cluster normalized feature profiles into perturbation sets.
+
+        Returns the deterministic K-medoids representatives and a tuple of
+        feature-index arrays that partitions every input column exactly once.
+        """
+        X = np.asarray(X)
         if X.ndim != 2:
             raise ValueError("X must be a two-dimensional feature matrix")
         if X.shape[1] == 0:
             raise ValueError("X must contain at least one feature")
         if not np.issubdtype(X.dtype, np.number):
             raise TypeError("K-medoids preprocessing requires numeric features")
+
+        if not isinstance(num_clusters, (int, np.integer)):
+            raise TypeError("num_clusters must be an integer")
+        if not 1 <= num_clusters <= X.shape[1]:
+            raise ValueError("num_clusters must be between 1 and the feature count")
 
         profiles = np.asarray(X, dtype=float).T
         profiles = profiles - np.mean(profiles, axis=1, keepdims=True)
@@ -233,7 +249,7 @@ class cvSet:
         # feature having the smallest total distance to all other features.
         medoids = [int(np.argmin(np.sum(distances, axis=1)))]
         nearest_distance = distances[:, medoids[0]].copy()
-        while len(medoids) < num_medoids:
+        while len(medoids) < num_clusters:
             candidate_distance = nearest_distance.copy()
             candidate_distance[medoids] = -np.inf
             next_medoid = int(np.argmax(candidate_distance))
@@ -244,7 +260,7 @@ class cvSet:
         for _ in range(max_iter):
             labels = np.argmin(distances[:, medoids], axis=1)
             updated = medoids.copy()
-            for cluster_index in range(num_medoids):
+            for cluster_index in range(num_clusters):
                 members = np.flatnonzero(labels == cluster_index)
                 if members.size:
                     within_cluster = distances[np.ix_(members, members)]
@@ -253,7 +269,13 @@ class cvSet:
                 break
             medoids = updated
 
-        return np.sort(medoids)
+        medoids = np.sort(medoids)
+        labels = np.argmin(distances[:, medoids], axis=1)
+        groups = tuple(
+            np.flatnonzero(labels == cluster_index).astype(int)
+            for cluster_index in range(num_clusters)
+        )
+        return medoids, groups
 
     def _reset_splits(self):
         """Discard previously generated splits before configuring new ones.

@@ -2,7 +2,15 @@
 
 import numpy as np
 
-from mistic.examples.classification_benchmark_suite import DatasetSpec, make_dataset
+from mistic.examples.classification_benchmark_suite import (
+    BenchmarkConfig,
+    DatasetSpec,
+    make_dataset,
+)
+
+
+def test_playground_defaults_to_forty_perturbation_clusters():
+    assert BenchmarkConfig().mistic_num_perturbation_clusters == 40
 
 
 def test_benchmark_signal_columns_are_permuted_and_mask_stays_aligned():
