@@ -2,7 +2,7 @@ name: Documentation
 
 on:
   push:
-    branches: [main]
+    branches: [main, "0.2"]
     paths:
       - ".github/workflows/docs.yml"
       - "docs/**"
@@ -19,28 +19,54 @@ concurrency:
 
 jobs:
   build:
-    name: Build documentation
+    name: Build stable and beta documentation
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
+      - name: Check out stable 0.1 source
         uses: actions/checkout@v7
+        with:
+          ref: main
+          path: source-stable
+
+      - name: Check out 0.2 beta source
+        uses: actions/checkout@v7
+        with:
+          ref: "0.2"
+          path: source-beta
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: |
+            source-stable/pyproject.toml
+            source-beta/pyproject.toml
 
-      - name: Install package and documentation dependencies
-        run: python -m pip install --upgrade pip ".[dev]"
+      - name: Build stable documentation
+        run: |
+          python -m venv .venv-stable
+          . .venv-stable/bin/activate
+          python -m pip install --upgrade pip "./source-stable[dev]"
+          python -m sphinx -W --keep-going -b html source-stable/docs site-root
+          deactivate
 
-      - name: Build documentation with warnings as errors
-        run: python -m sphinx -W --keep-going -b html docs docs/_build/html
+      - name: Build beta documentation
+        run: |
+          python -m venv .venv-beta
+          . .venv-beta/bin/activate
+          python -m pip install --upgrade pip "./source-beta[dev]"
+          python -m sphinx -W --keep-going -b html source-beta/docs site-beta
+          deactivate
 
-      - name: Disable Jekyll processing
-        run: touch docs/_build/html/.nojekyll
+      - name: Assemble versioned documentation site
+        run: |
+          mkdir -p site/stable site/beta
+          cp -a site-root/. site/
+          cp -a site-root/. site/stable/
+          cp -a site-beta/. site/beta/
+          touch site/.nojekyll
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
@@ -48,7 +74,7 @@ jobs:
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: docs/_build/html
+          path: site
 
   deploy:
     name: Publish documentation
