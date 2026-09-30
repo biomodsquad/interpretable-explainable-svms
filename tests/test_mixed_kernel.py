@@ -77,6 +77,49 @@ def test_base_kernel_analytical_gradient(kernel_type, parameters, data):
     np.testing.assert_allclose(analytical, numerical, rtol=2e-5, atol=2e-6)
 
 
+def test_tanimoto_kernel_matches_binary_jaccard_and_handles_empty_vectors():
+    X = np.array([[1, 0, 1], [1, 1, 0], [0, 0, 0]], dtype=float)
+    actual = kernelWrapper("tanimoto").compute(X, [0, 1, 2])
+    expected = np.array(
+        [[1.0, 1.0 / 3.0, 0.0], [1.0 / 3.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+    )
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_tanimoto_gradient_matches_finite_difference():
+    X = np.array([[0.2, 0.0, 1.0], [1.0, 0.5, 0.1]])
+    Y = np.array([[0.4, 0.7, 0.3], [0.8, 0.2, 0.6]])
+    kernel = kernelWrapper("tanimoto")
+    epsilon = 1e-6
+    plus, minus = Y.copy(), Y.copy()
+    plus[:, 1] += epsilon
+    minus[:, 1] -= epsilon
+    numerical = (
+        kernel.compute(X, [0, 1, 2], {}, plus)
+        - kernel.compute(X, [0, 1, 2], {}, minus)
+    ) / (2 * epsilon)
+    analytical = kernel.compute_gradient(X, [0, 1, 2], 1, {}, Y)
+    np.testing.assert_allclose(analytical, numerical, rtol=2e-5, atol=2e-6)
+
+
+def test_tanimoto_rejects_negative_features():
+    with pytest.raises(ValueError, match="nonnegative"):
+        kernelWrapper("tanimoto").compute(np.array([[1.0, -1.0]]), [0, 1])
+
+
+def test_tanimoto_is_available_in_mixed_expressions():
+    X = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]])
+    Y = np.array([[1.0, 1.0, 0.0]])
+    expression = (
+        0.7 * kernelWrapper("tanimoto", name="fingerprint")
+        + 0.3 * kernelWrapper("linear", name="linear")
+    )
+    actual = expression.compute(X, [0, 1, 2], {}, Y)
+    expected = 0.7 * kernelWrapper("tanimoto").compute(X, [0, 1, 2], {}, Y)
+    expected += 0.3 * kernelWrapper("linear").compute(X, [0, 1, 2], {}, Y)
+    np.testing.assert_allclose(actual, expected)
+
+
 def test_mixed_gradient_obeys_chain_and_product_rules(data):
     X, Y = data
     expression = (kernelWrapper("linear") + kernelWrapper("rbf", name="r")) ** 2
@@ -188,6 +231,70 @@ def test_selection_units_keep_kernel_perturbation_sets_independent():
     np.testing.assert_array_equal(ensemble.features, [0, 1, 2])
 
 
+def test_svmset_kernel_candidate_features_restrict_selection_space():
+    X, y = load_breast_cancer(return_X_y=True)
+    X, y = X[:80, :4], y[:80]
+    splits = cvSet(X, y, feature_medoids=[0, 2])
+    splits.classification(num_sets=2, validation_size=0.25, random_seed=3)
+    kernel = (
+        kernelWrapper("linear", name="continuous")
+        + kernelWrapper("rbf", name="radial")
+    )
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=kernel,
+        perturbation_sets=[[0, 1], [2, 3]],
+        kernel_candidate_features={"continuous": [0, 1], "radial": [2, 3]},
+    )
+
+    assert [(unit.kernel_id, unit.features) for unit in ensemble.selection_space_] == [
+        ("continuous", (0, 1)),
+        ("radial", (2, 3)),
+    ]
+    np.testing.assert_array_equal(ensemble.kernel_features["continuous"], [0, 1])
+    np.testing.assert_array_equal(ensemble.kernel_features["radial"], [2, 3])
+
+
+def test_kernel_candidate_features_validate_names_and_indices():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:40, :3], y[:40], num_feature_medoids=0)
+    splits.classification(num_sets=2)
+    kernel = kernelWrapper("linear", name="linear") + kernelWrapper("rbf", name="radial")
+
+    with pytest.raises(ValueError, match="unknown kernels"):
+        svmSet(
+            SVC(kernel="precomputed"), splits, score_svc().score, kernel=kernel,
+            kernel_candidate_features={"missing": [0]},
+        )
+    with pytest.raises(ValueError, match="out-of-range"):
+        svmSet(
+            SVC(kernel="precomputed"), splits, score_svc().score, kernel=kernel,
+            kernel_candidate_features={"linear": [3]},
+        )
+
+
+def test_mixed_forward_initial_units_honor_explicit_medoids():
+    X, y = load_breast_cancer(return_X_y=True)
+    X, y = X[:70, :3], y[:70]
+    splits = cvSet(X, y, feature_medoids=[2])
+    splits.classification(num_sets=2, validation_size=0.25, random_seed=2)
+    kernel = kernelWrapper("linear", name="linear") + kernelWrapper("rbf", name="radial")
+    ensemble = svmSet(
+        SVC(kernel="precomputed"), splits, score_svc().score, kernel=kernel,
+        kernel_candidate_features={"linear": [0, 1], "radial": [2]},
+    )
+    ensemble.greedy_forward_selection(
+        [paramSet({"C": 1.0}, {"radial__gamma": 0.01})],
+        max_features=1,
+        num_initial_medoids=1,
+        post_find_knee=False,
+    )
+
+    assert ensemble.selected_kernel_features_ == (("radial", 2),)
+
+
 def test_selection_state_is_separate_for_each_fold_when_requested():
     X, y = load_breast_cancer(return_X_y=True)
     splits = cvSet(X[:60, :2], y[:60])
@@ -199,7 +306,7 @@ def test_selection_state_is_separate_for_each_fold_when_requested():
         score_svc().score,
         kernel=mixed,
         kernel_feature_selection="independent",
-        separate_feature_sets=True,
+        feature_set_policy="per_model",
     )
 
     ensemble.remove_selection_units([0], model_index=0, update_kernel=False)
@@ -208,6 +315,112 @@ def test_selection_state_is_separate_for_each_fold_when_requested():
     assert 0 in ensemble.selection_state_[1].active
     assert 0 not in ensemble.kernel_features[0]["linear"]
     assert 0 in ensemble.kernel_features[1]["linear"]
+
+
+def test_shared_policy_uses_per_model_states_kept_in_sync():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:60, :2], y[:60])
+    splits.classification(num_sets=2)
+    mixed = kernelWrapper("linear", name="linear") + kernelWrapper("rbf", name="radial")
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=mixed,
+        feature_set_policy="shared",
+    )
+
+    ensemble.remove_selection_units([0], update_kernel=False)
+
+    assert isinstance(ensemble.selection_state_, list)
+    assert len(ensemble.selection_state_) == ensemble.num_models
+    assert all(0 not in state.active for state in ensemble.selection_state_)
+    assert all(state == ensemble.selection_state_[0] for state in ensemble.selection_state_)
+
+
+def test_feature_set_policy_validates_deprecated_alias_conflicts():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:60, :2], y[:60])
+    splits.classification(num_sets=2)
+
+    with np.testing.assert_raises_regex(ValueError, "conflicts"):
+        svmSet(
+            SVC(kernel="precomputed"),
+            splits,
+            score_svc().score,
+            separate_feature_sets=True,
+            feature_set_policy="shared",
+        )
+
+
+def test_unified_feature_policy_validates_supported_values():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:60, :2], y[:60])
+    splits.classification(num_sets=3)
+
+    with pytest.raises(ValueError, match="unified_feature_policy"):
+        svmSet(
+            SVC(kernel="precomputed"),
+            splits,
+            score_svc().score,
+            unified_feature_policy="all",
+        )
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_active"),
+    [("any", {0, 1, 2, 3}), ("majority", {0})],
+)
+def test_unified_policy_aggregates_kernel_specific_selection_units(
+    policy, expected_active
+):
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:60, :2], y[:60])
+    splits.classification(num_sets=3)
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=kernelWrapper("linear", name="linear")
+        + kernelWrapper("rbf", name="radial"),
+        kernel_feature_selection="independent",
+        feature_set_policy="per_model",
+        unified_feature_policy=policy,
+    )
+    for model_index, active in enumerate(({0, 1}, {0, 2}, {0, 3})):
+        ensemble.set_selection_units(active, model_index=model_index, update_kernel=False)
+
+    unified = ensemble._unified_kernel_features()
+
+    assert set(ensemble.unified_selection_units_) == expected_active
+    expected_state = ensemble.selection_state_[0].only(expected_active)
+    for kernel_name in ensemble.kernel.kernel_names:
+        np.testing.assert_array_equal(
+            unified[kernel_name], expected_state.kernel_features[kernel_name]
+        )
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected"),
+    [("any", [0, 1]), ("majority", [0])],
+)
+def test_unified_policy_aggregates_shared_kernel_perturbation_sets(policy, expected):
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:60, :2], y[:60])
+    splits.classification(num_sets=3)
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=kernelWrapper("linear"),
+        kernel_feature_selection="shared",
+        feature_set_policy="per_model",
+        unified_feature_policy=policy,
+    )
+    for model_index, features in enumerate(([0, 1], [0], [0])):
+        ensemble._set_features(features, model_index=model_index, update_kernel=False)
+
+    np.testing.assert_array_equal(ensemble._unified_kernel_features(), expected)
 
 
 def test_forward_kernel_selection_chooses_kernel_feature_pairs():
@@ -294,7 +507,8 @@ def test_forward_kernel_selection_accepts_kernel_unit_feature_ranker():
     assert calls
     assert all(set_name == "train" for _, set_name, _ in calls)
     assert len(ensemble.selected_selection_units_) == 2
-    assert ensemble.selection_state_.active == frozenset(ensemble.selected_selection_units_)
+    assert ensemble.selection_state_[0].active == frozenset(ensemble.selected_selection_units_)
+    assert all(state == ensemble.selection_state_[0] for state in ensemble.selection_state_)
 
 
 def test_forward_kernel_selection_validates_addition_factor():
@@ -349,9 +563,70 @@ def test_unified_forward_and_backward_selection_support_mixed_kernel_units():
         grid, reduction_factor=0.5, post_find_knee=False
     )
     assert backward.selected_selection_units_
-    assert backward.selection_state_.active == frozenset(
+    assert backward.selection_state_[0].active == frozenset(
         backward.selected_selection_units_
     )
+
+
+def test_per_model_forward_and_backward_select_different_mixed_kernel_units():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:70, :2], y[:70])
+    splits.classification(num_sets=2)
+    grid = [paramSet({"C": 1.0}, {"gamma": 0.001})]
+    mixed = kernelWrapper("linear", name="linear") + kernelWrapper("rbf", name="radial")
+
+    def opposing_ranker(model, model_index, set_for_rank):
+        candidates = model._candidate_selection_unit_indices(model_index)
+        ranks = np.arange(len(candidates), dtype=float)
+        return ranks if model_index == 0 else ranks[::-1]
+
+    forward = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=mixed,
+        feature_set_policy="per_model",
+    )
+    forward.greedy_forward_selection(
+        grid,
+        max_features=2,
+        addition_factor=0,
+        num_initial_medoids=1,
+        feature_ranker=opposing_ranker,
+        post_find_knee=False,
+    )
+
+    assert forward.separate_parameters is False
+    assert len(forward.selected_selection_units_) == forward.num_models
+    assert forward.selected_selection_units_[0] != forward.selected_selection_units_[1]
+    assert tuple(forward.selection_state_[0].active) != tuple(
+        forward.selection_state_[1].active
+    )
+    assert all(
+        "selection_units_per_model" in row
+        for row in forward.feature_performance_.values()
+    )
+
+    backward = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=mixed,
+        feature_set_policy="per_model",
+    )
+    backward.greedy_backward_selection(
+        grid,
+        reduction_factor=0.5,
+        feature_ranker=opposing_ranker,
+        post_find_knee=False,
+    )
+
+    recorded_states = [
+        row["selection_units_per_model"]
+        for row in backward.feature_performance_.values()
+    ]
+    assert any(states[0] != states[1] for states in recorded_states[1:])
+    assert backward.separate_parameters is False
 
 
 def test_single_kernel_is_normalized_to_weight_one_mixed_kernel():
@@ -397,4 +672,35 @@ def test_mixed_performance_knee_uses_and_restores_selection_feature_count():
 
     ensemble.tune_models = lambda parameter_grid: None
     ensemble.set_num_selection_features(2, [])
-    assert ensemble.selection_state_.active == frozenset({0, 1})
+    assert ensemble.selection_state_[0].active == frozenset({0, 1})
+
+
+def test_per_model_selection_state_restoration_uses_exact_fold_snapshots():
+    X, y = load_breast_cancer(return_X_y=True)
+    splits = cvSet(X[:50, :2], y[:50])
+    splits.classification(num_sets=2)
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=kernelWrapper("linear", name="linear")
+        + kernelWrapper("rbf", name="radial"),
+        feature_set_policy="per_model",
+    )
+    ensemble.feature_performance_ = {
+        0: {
+            "num_features": 1,
+            "num_selection_features": 2,
+            "score": 0.8,
+            "selection_units_per_model": ((0, 1), (2, 3)),
+        }
+    }
+
+    ensemble.set_num_selection_features(
+        2, [paramSet({"C": 1.0}, {"gamma": 0.001})]
+    )
+
+    assert ensemble.selection_state_[0].active == frozenset({0, 1})
+    assert ensemble.selection_state_[1].active == frozenset({2, 3})
+    assert ensemble.selected_selection_units_ == [(0, 1), (2, 3)]
+    assert ensemble.separate_parameters is False

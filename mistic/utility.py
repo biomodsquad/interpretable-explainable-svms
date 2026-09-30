@@ -519,6 +519,7 @@ class kernelWrapper:
         """Return the parameters understood by this kernel type."""
         return {
             "linear": [],
+            "tanimoto": [],
             "rbf": ["gamma"],
             "poly": ["gamma", "degree", "coef0"],
             "polynomial": ["gamma", "degree", "coef0"],
@@ -570,6 +571,25 @@ class kernelWrapper:
             Y = []
         if parameters is None:
             parameters = {}
+        if self.type == "tanimoto":
+            X_selected = np.asarray(X[:, feature_index], dtype=float)
+            Y_selected = X_selected if len(Y) == 0 else np.asarray(
+                Y[:, feature_index], dtype=float
+            )
+            if np.any(X_selected < 0) or np.any(Y_selected < 0):
+                raise ValueError("the Tanimoto kernel requires nonnegative features")
+            numerator = X_selected @ Y_selected.T
+            denominator = (
+                np.sum(X_selected**2, axis=1)[:, np.newaxis]
+                + np.sum(Y_selected**2, axis=1)[np.newaxis, :]
+                - numerator
+            )
+            return np.divide(
+                numerator,
+                denominator,
+                out=np.ones_like(numerator, dtype=float),
+                where=denominator != 0,
+            )
         if len(Y) == 0:
             if not bool(parameters):
                 kernel_matrix = pairwise_kernels(X[:, feature_index], metric=self.type)
@@ -642,6 +662,29 @@ class kernelWrapper:
                 gamma
                 * X[:, wrt, np.newaxis]
                 * (1.0 - K**2)
+            )
+
+        elif self.type == "tanimoto":
+            X_selected = np.asarray(X[:, feature_index], dtype=float)
+            Y_selected = np.asarray(Y[:, feature_index], dtype=float)
+            if np.any(X_selected < 0) or np.any(Y_selected < 0):
+                raise ValueError("the Tanimoto kernel requires nonnegative features")
+            numerator = X_selected @ Y_selected.T
+            denominator = (
+                np.sum(X_selected**2, axis=1)[:, np.newaxis]
+                + np.sum(Y_selected**2, axis=1)[np.newaxis, :]
+                - numerator
+            )
+            x_wrt = np.asarray(X[:, wrt], dtype=float)[:, np.newaxis]
+            y_wrt = np.asarray(Y[:, wrt], dtype=float)[np.newaxis, :]
+            derivative_numerator = x_wrt * denominator - numerator * (
+                2.0 * y_wrt - x_wrt
+            )
+            kernel_gradient = np.divide(
+                derivative_numerator,
+                denominator**2,
+                out=np.zeros_like(derivative_numerator, dtype=float),
+                where=denominator != 0,
             )
 
         else:

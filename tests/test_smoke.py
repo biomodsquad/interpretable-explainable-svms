@@ -71,7 +71,10 @@ def _fitted_ensemble():
 
 
 def test_public_api_and_version():
-    assert mistic.__version__ == "0.1.1"
+    project_file = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    with project_file.open("rb") as stream:
+        expected_version = tomllib.load(stream)["project"]["version"]
+    assert mistic.__version__ == expected_version
     assert set(mistic.__all__) == {
         "combined_rank",
         "cvSet",
@@ -119,7 +122,6 @@ def test_legacy_pickle_without_unified_model_falls_back_to_set_prediction():
 
 def test_mean_performance_averages_separate_model_results():
     ensemble = _fitted_ensemble()
-    ensemble.separate_parameters = True
     ensemble.performance_ = [
         {"score": 0.6, "auc": np.float64(0.7), "kernel": "linear"},
         {"score": 0.8, "auc": np.float64(0.9), "kernel": "linear"},
@@ -140,6 +142,21 @@ def test_mean_performance_preserves_existing_aggregate():
     assert result is not ensemble.performance_
 
 
+def test_removed_separate_parameters_option_is_accepted_but_ignored():
+    fitted = _fitted_ensemble()
+    with np.testing.suppress_warnings() as caught:
+        caught.filter(DeprecationWarning)
+        ensemble = svmSet(
+            SVC(kernel="precomputed"),
+            fitted.cv,
+            score_svc().score,
+            kernel=kernelWrapper("linear"),
+            separate_parameters=True,
+        )
+
+    assert ensemble.separate_parameters is False
+
+
 def test_cv_feature_medoids_default_to_twenty_or_feature_count():
     rng = np.random.default_rng(7)
     large = cvSet(rng.normal(size=(40, 25)), np.arange(40))
@@ -157,10 +174,24 @@ def test_cv_feature_medoids_are_deterministic_and_validate_count():
     second = cvSet(X, np.arange(30), num_feature_medoids=5)
 
     np.testing.assert_array_equal(first.feature_medoids_, second.feature_medoids_)
+    skipped = cvSet(X, np.arange(30), num_feature_medoids=0)
+    assert skipped.feature_medoids_.size == 0
     with np.testing.assert_raises(ValueError):
-        cvSet(X, np.arange(30), num_feature_medoids=0)
+        cvSet(X, np.arange(30), num_feature_medoids=-1)
     with np.testing.assert_raises(TypeError):
         cvSet(X, np.arange(30), num_feature_medoids=2.5)
+
+
+def test_cv_accepts_explicit_feature_medoids_without_clustering():
+    X = np.arange(120, dtype=float).reshape(30, 4)
+    splits = cvSet(X, np.arange(30), feature_medoids=[3, 1])
+
+    np.testing.assert_array_equal(splits.feature_medoids_, [3, 1])
+    assert splits.num_feature_medoids == 2
+    with np.testing.assert_raises_regex(ValueError, "duplicates"):
+        cvSet(X, np.arange(30), feature_medoids=[1, 1])
+    with np.testing.assert_raises_regex(ValueError, "out-of-range"):
+        cvSet(X, np.arange(30), feature_medoids=[4])
 
 
 def test_cv_feature_clustering_returns_a_deterministic_partition():
@@ -446,6 +477,51 @@ def test_integrated_gradients_satisfy_svc_decision_completeness():
     )
 
     np.testing.assert_allclose(values.sum(axis=1), expected, atol=1e-10)
+
+
+def test_binary_path_attribution_requires_reference_and_is_complete():
+    rng = np.random.default_rng(31)
+    X = rng.integers(0, 2, size=(90, 8)).astype(float)
+    y = ((X[:, 0] + X[:, 2] + X[:, 5]) >= 2).astype(int)
+    splits = cvSet(X, y)
+    splits.classification(num_sets=2, validation_size=0.25, random_seed=4)
+    ensemble = svmSet(
+        SVC(kernel="precomputed"),
+        splits,
+        score_svc().score,
+        kernel=kernelWrapper("tanimoto"),
+    )
+    ensemble.tune_models([paramSet({"C": 1.0}, {})])
+    explained = X[:4]
+    reference = np.zeros(X.shape[1])
+
+    with np.testing.assert_raises_regex(ValueError, "explicit reference_point"):
+        ensemble.integrated_gradient(explained, discrete_features=np.arange(X.shape[1]))
+
+    values = ensemble.integrated_gradient(
+        explained,
+        reference_point=reference,
+        discrete_features=np.arange(X.shape[1]),
+        n_discrete_paths=5,
+        random_seed=7,
+    )
+    references = np.broadcast_to(reference, explained.shape)
+    expected = ensemble.decision_function(
+        explained, prediction_mode="set"
+    ) - ensemble.decision_function(references, prediction_mode="set")
+    np.testing.assert_allclose(values.sum(axis=1), expected, atol=1e-12)
+
+
+def test_binary_path_attribution_rejects_fractional_states():
+    ensemble = _fitted_ensemble()
+    X = np.zeros((1, ensemble.cv.X.shape[1]))
+    X[0, 0] = 0.5
+    with np.testing.assert_raises_regex(ValueError, "must be binary"):
+        ensemble.integrated_gradient(
+            X,
+            reference_point=np.zeros(X.shape[1]),
+            discrete_features=np.arange(X.shape[1]),
+        )
 
 
 def test_integrated_gradients_satisfy_svr_prediction_completeness():
@@ -873,6 +949,9 @@ def test_backward_selection_retunes_selected_subset_after_scaled_search():
     assert len(tuned_feature_counts) == 2
     assert tuned_feature_counts[0] == ensemble.cv.X.shape[1]
     assert tuned_feature_counts[-1] == len(ensemble.features)
+    np.testing.assert_array_equal(
+        ensemble.kernel_features[ensemble.kernel.kernel_names[0]], ensemble.features
+    )
 
 
 def test_forward_selection_retunes_selected_subset_after_scaled_search():
