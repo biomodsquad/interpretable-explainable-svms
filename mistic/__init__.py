@@ -16,15 +16,15 @@ from .utility import (
     score_svr,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.2.0b1"
 
 __all__ = [
     "BoundaryCounterfactualResult",
     "IntegratedGradientsResult",
-    "MixedKernel",
-    "MixedkernelWrapper",
     "KernelFeatureSelectionState",
     "KernelFeatureSet",
+    "MixedKernel",
+    "MixedkernelWrapper",
     "categorical",
     "combined_rank",
     "cvSet",

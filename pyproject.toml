@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mistic-svm"
-version = "0.1.1"
+version = "0.2.0b1"
 description = "Model-informed feature selection through importance and contribution for SVMs"
 readme = "README.md"
 requires-python = ">=3.10"
