@@ -19,6 +19,14 @@ These objects are available directly from :mod:`mistic`.
    mistic.combined_rank
    mistic.cvSet
    mistic.kernelWrapper
+   mistic.MixedKernel
+   mistic.KernelFeatureSet
+   mistic.KernelFeatureSelectionState
+   mistic.parameterSpace
+   mistic.uniform
+   mistic.loguniform
+   mistic.integer
+   mistic.categorical
    mistic.paramSet
    mistic.perDiff
    mistic.score_ocsvm
@@ -56,3 +64,14 @@ Utilities
 
 .. automodule:: mistic.utility
    :members:
+
+Mixed kernels
+-------------
+
+.. automodule:: mistic.mixed_kernel
+   :members:
+
+``mistic.MixedkernelWrapper`` is retained as a deprecated compatibility
+constructor. New code should use :class:`mistic.MixedKernel`; see
+:doc:`tutorials/mixed_kernels` for expression construction, tunable weights,
+and kernel-specific feature sets.

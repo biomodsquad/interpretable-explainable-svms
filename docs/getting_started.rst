@@ -16,6 +16,16 @@ Create an isolated environment, then install the package:
    $ python -m pip install --upgrade pip
    $ python -m pip install mistic-svm
 
+The command above installs the stable 0.1 series. To evaluate the 0.2 beta,
+request its pre-release version explicitly:
+
+.. code-block:: console
+
+   $ python -m pip install "mistic-svm==0.2.0b1"
+
+Pin the beta in reproducible environments. A normal upgrade without an exact
+version does not opt into newer pre-releases.
+
 Confirm the installation:
 
 .. code-block:: python
@@ -66,7 +76,7 @@ configured with ``kernel="precomputed"``.
 .. code-block:: python
 
    from sklearn.svm import SVC
-   from mistic import cvSet, kernelWrapper, paramSet, score_svc, svmSet
+   from mistic import MixedKernel, cvSet, kernelWrapper, paramSet, score_svc, svmSet
 
    splits = cvSet(X_dev, y_dev)
    splits.classification(num_sets=5, validation_size=0.2, random_seed=7)
@@ -77,8 +87,11 @@ configured with ``kernel="precomputed"``.
        probability=True,
        random_state=7,
    )
+   kernel = MixedKernel.weighted_sum(
+       [kernelWrapper("rbf", name="radial")], weights=[1.0]
+   )
    grid = [
-       paramSet(model={"C": C}, kernel={"gamma": gamma})
+       paramSet(model={"C": C}, kernel={"radial__gamma": gamma})
        for C in (0.5, 2.0, 8.0)
        for gamma in (2**-7, 2**-4, 2**-1)
    ]
@@ -87,12 +100,76 @@ configured with ``kernel="precomputed"``.
        estimator,
        splits,
        score_method=score_svc(weight=0.5, calibration_weight=0.2).score,
-       kernel=kernelWrapper("rbf"),
-       separate_feature_sets=True,
-       separate_parameters=True,
+       kernel=kernel,
+       kernel_feature_selection="shared",
+       feature_set_policy="per_model",
    )
    model.tune_models(grid)
    print(model.mean_performance())
+
+Space-filling parameter search
+------------------------------
+
+For continuous hyperparameters, a Latin hypercube provides broader coverage
+than a similarly sized regular grid. Positive scale parameters such as ``C``
+and ``gamma`` should generally be sampled logarithmically.
+
+.. code-block:: python
+
+   from mistic import loguniform, parameterSpace
+
+   grid = parameterSpace(
+       model={"C": loguniform(1e-3, 1e3)},
+       kernel={"radial__gamma": loguniform(1e-6, 1e1)},
+   ).sample(
+       n_trials=24,
+       strategy="latin_hypercube",
+       random_state=7,
+   )
+
+   model.tune_models(grid)
+
+Use ``uniform`` for linear continuous ranges, ``integer`` for inclusive
+integer ranges, and ``categorical`` for discrete choices. Plain values in a
+parameter space are held fixed. Discrete duplicate candidates are removed,
+so the returned list can contain fewer entries than ``n_trials``.
+
+Independent mixed-kernel features
+---------------------------------
+
+A mixed kernel can select assignments independently, so removing a feature
+from one base kernel does not remove it from another::
+
+   from mistic import MixedKernel
+
+   mixed = MixedKernel.weighted_sum(
+       [
+           kernelWrapper("linear", name="linear"),
+           kernelWrapper("rbf", name="radial"),
+       ],
+       weight_parameters=["linear_weight", "radial_weight"],
+   )
+   model = svmSet(
+       estimator,
+       splits,
+       score_method=score_svc().score,
+       kernel=mixed,
+       kernel_feature_selection="independent",
+   )
+   model.remove_kernel_features("radial", [2, 5])
+   model.add_kernel_features("linear", [2])
+
+Use ``greedy_forward_selection(grid, max_features=10,
+num_initial_medoids=1, addition_factor=0.3)`` to select kernel/perturbation
+units automatically. ``combined_rank`` works for both one-leaf and mixed
+kernels and combines frozen-model contribution and objective importance. The initial parameter controls the
+first screened batch independently. After that, the addition factor is
+computed from the remaining distance to the maximum kernel-feature count;
+zero adds exactly one unit per later iteration. The resulting
+``kernel_features`` mapping records the assignments, while ``features``
+remains the union of original input columns for reporting and explanations.
+See :doc:`tutorials/mixed_kernels` for products, powers, kernel-specific
+candidate pools, grouped perturbations, and mixed-kernel integrated gradients.
 
 Next steps
 ----------

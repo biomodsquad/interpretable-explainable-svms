@@ -2,6 +2,9 @@
 
 from .cvSet import cvSet
 from .explanations import BoundaryCounterfactualResult, IntegratedGradientsResult
+from .mixed_kernel import MixedKernel, MixedkernelWrapper
+from .parameter_space import categorical, integer, loguniform, parameterSpace, uniform
+from .selection import KernelFeatureSelectionState, KernelFeatureSet
 from .svmSet import svmSet
 from .utility import (
     combined_rank,
@@ -13,18 +16,27 @@ from .utility import (
     score_svr,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.2.0b1"
 
 __all__ = [
-    "IntegratedGradientsResult",
     "BoundaryCounterfactualResult",
+    "IntegratedGradientsResult",
+    "KernelFeatureSelectionState",
+    "KernelFeatureSet",
+    "MixedKernel",
+    "MixedkernelWrapper",
+    "categorical",
     "combined_rank",
     "cvSet",
+    "integer",
     "kernelWrapper",
+    "loguniform",
     "paramSet",
+    "parameterSpace",
     "perDiff",
     "score_ocsvm",
     "score_svc",
     "score_svr",
     "svmSet",
+    "uniform",
 ]

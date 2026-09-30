@@ -81,8 +81,17 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 
-# Local research notebooks (not part of the distribution)
-/experimentation/
+# Local research outputs (not part of the distribution). Keep the legacy
+# notebooks and benchmark script relocated from mistic/examples under version
+# control, while ignoring all other generated experimentation artifacts.
+/experimentation/*
+!/experimentation/BreastCancer_kernel_unit_ranked_forward.executed.ipynb
+!/experimentation/BreastCancer_kernel_unit_ranked_forward.ipynb
+!/experimentation/BreastCancer_mixed_kernel_forward.ipynb
+!/experimentation/BreastCancer_one_class.ipynb
+!/experimentation/Classification_MiSTIC_ExtraTrees_playground.executed.ipynb
+!/experimentation/Classification_MiSTIC_ExtraTrees_playground.ipynb
+!/experimentation/classification_benchmark_suite.py
 
 # IPython
 profile_default/

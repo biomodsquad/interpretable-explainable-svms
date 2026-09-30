@@ -20,6 +20,7 @@ repository_root = Path(__file__).resolve().parents[1]
 with (repository_root / "pyproject.toml").open("rb") as project_file:
     release = tomllib.load(project_file)["project"]["version"]
 version = release
+is_prerelease = any(marker in release for marker in ("a", "b", "rc", "dev"))
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -41,14 +42,15 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 html_theme = "furo"
 html_title = f"MISTIC {release}"
-html_baseurl = "https://biomodsquad.org/interpretable-explainable-svms/"
+documentation_root = "https://biomodsquad.org/interpretable-explainable-svms/"
+html_baseurl = documentation_root + ("beta/" if is_prerelease else "")
 html_logo = "_static/mistic-logo.jpg"
 html_favicon = "_static/mistic-icon.png"
 html_static_path = ["_static"]
 html_css_files = ["custom.css"]
 html_theme_options = {
     "source_repository": "https://github.com/biomodsquad/interpretable-explainable-svms/",
-    "source_branch": "main",
+    "source_branch": "0.2" if is_prerelease else "main",
     "source_directory": "docs/",
     "footer_icons": [
         {
@@ -68,3 +70,8 @@ html_theme_options = {
         "color-brand-content": "#62d4c9",
     },
 }
+if is_prerelease:
+    html_theme_options["announcement"] = (
+        "You are reading the MISTIC 0.2 beta documentation. "
+        f'<a href="{documentation_root}">View the stable 0.1 documentation.</a>'
+    )

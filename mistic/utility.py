@@ -16,7 +16,7 @@ from sklearn.metrics.pairwise import pairwise_kernels
 
 
 class combined_rank:
-    """Blend perturbation and frozen-objective feature rankings.
+    """Blend perturbation and frozen-objective selection-unit rankings.
 
     Parameters
     ----------
@@ -66,8 +66,21 @@ class combined_rank:
         Returns
         -------
         numpy.ndarray
-            Zero-based consensus rank for each feature.
+            Zero-based consensus rank for each candidate kernel/perturbation
+            unit. For legacy shared selection this is one rank per feature
+            perturbation set.
         """
+        if svmSet.kernel_feature_selection == "independent":
+            contribution = svmSet.selection_unit_contribution_(model_index, set_for_rank)
+            importance = svmSet.selection_unit_importance_(model_index)
+            if len(contribution) != len(importance):
+                raise RuntimeError("selection-unit contribution and importance are misaligned")
+            contribution_rank = rank_items(contribution)
+            feature_rank = rank_items(importance)
+            return rank_items(
+                self.weight * contribution_rank + (1 - self.weight) * feature_rank
+            )
+
         if set_for_rank == "sample":
             np.random.seed(self.random_seed)
             X_for_rank = np.zeros([self.number_samples, svmSet.cv.X.shape[1]])
@@ -488,7 +501,7 @@ class kernelWrapper:
         Kernel metric passed to scikit-learn.
     """
 
-    def __init__(self, type="rbf"):
+    def __init__(self, type="rbf", name=None, features=None):
         """Select a kernel accepted by scikit-learn pairwise kernels.
 
         Parameters are documented on :class:`kernelWrapper`.
@@ -499,6 +512,39 @@ class kernelWrapper:
         """
         # [‘additive_chi2’, ‘chi2’, ‘linear’, ‘poly’, ‘polynomial’, ‘rbf’, ‘laplacian’, ‘sigmoid’, ‘cosine’]
         self.type = type
+        self.name = name
+        self.features = features
+
+    def params_needed(self):
+        """Return the parameters understood by this kernel type."""
+        return {
+            "linear": [],
+            "tanimoto": [],
+            "rbf": ["gamma"],
+            "poly": ["gamma", "degree", "coef0"],
+            "polynomial": ["gamma", "degree", "coef0"],
+            "sigmoid": ["gamma", "coef0"],
+        }.get(self.type, [])
+
+    def __add__(self, other):
+        from .mixed_kernel import MixedKernel
+
+        return MixedKernel.from_operand(self) + other
+
+    def __mul__(self, other):
+        from .mixed_kernel import MixedKernel
+
+        return MixedKernel.from_operand(self) * other
+
+    def __rmul__(self, other):
+        from .mixed_kernel import MixedKernel
+
+        return other * MixedKernel.from_operand(self)
+
+    def __pow__(self, power):
+        from .mixed_kernel import MixedKernel
+
+        return MixedKernel.from_operand(self) ** power
 
     def compute(self, X, feature_index, parameters=None, Y=None):
         """Compute a kernel matrix over the selected feature columns.
@@ -525,6 +571,25 @@ class kernelWrapper:
             Y = []
         if parameters is None:
             parameters = {}
+        if self.type == "tanimoto":
+            X_selected = np.asarray(X[:, feature_index], dtype=float)
+            Y_selected = X_selected if len(Y) == 0 else np.asarray(
+                Y[:, feature_index], dtype=float
+            )
+            if np.any(X_selected < 0) or np.any(Y_selected < 0):
+                raise ValueError("the Tanimoto kernel requires nonnegative features")
+            numerator = X_selected @ Y_selected.T
+            denominator = (
+                np.sum(X_selected**2, axis=1)[:, np.newaxis]
+                + np.sum(Y_selected**2, axis=1)[np.newaxis, :]
+                - numerator
+            )
+            return np.divide(
+                numerator,
+                denominator,
+                out=np.ones_like(numerator, dtype=float),
+                where=denominator != 0,
+            )
         if len(Y) == 0:
             if not bool(parameters):
                 kernel_matrix = pairwise_kernels(X[:, feature_index], metric=self.type)
@@ -568,25 +633,58 @@ class kernelWrapper:
         """
         if Y is None:
             Y = []
+        gamma = parameters.get("gamma", 1.0 / len(feature_index))
         if self.type == "rbf":
             K = self.compute(X, feature_index=feature_index, parameters=parameters, Y=Y)
 
             kernel_gradient = (
-                2 * parameters["gamma"] * (X[:, wrt, np.newaxis] - Y[np.newaxis, :, wrt]) * K
+                2 * gamma * (X[:, wrt, np.newaxis] - Y[np.newaxis, :, wrt]) * K
             )
 
         elif self.type == "linear":
             kernel_gradient = np.broadcast_to(X[:, wrt, np.newaxis], (len(X), len(Y)))
 
-        elif self.type == "polynomial":
+        elif self.type in ("poly", "polynomial"):
             # K(X, Y) = (gamma <X, Y> + coef0) ^ degree
             d_parameters = copy.deepcopy(parameters)
             d_parameters["degree"] = parameters["degree"] - 1
 
             kernel_gradient = (
                 parameters["degree"]
+                * gamma
                 * X[:, wrt, np.newaxis]
                 * self.compute(X, feature_index, d_parameters, Y)
+            )
+
+        elif self.type == "sigmoid":
+            K = self.compute(X, feature_index=feature_index, parameters=parameters, Y=Y)
+            kernel_gradient = (
+                gamma
+                * X[:, wrt, np.newaxis]
+                * (1.0 - K**2)
+            )
+
+        elif self.type == "tanimoto":
+            X_selected = np.asarray(X[:, feature_index], dtype=float)
+            Y_selected = np.asarray(Y[:, feature_index], dtype=float)
+            if np.any(X_selected < 0) or np.any(Y_selected < 0):
+                raise ValueError("the Tanimoto kernel requires nonnegative features")
+            numerator = X_selected @ Y_selected.T
+            denominator = (
+                np.sum(X_selected**2, axis=1)[:, np.newaxis]
+                + np.sum(Y_selected**2, axis=1)[np.newaxis, :]
+                - numerator
+            )
+            x_wrt = np.asarray(X[:, wrt], dtype=float)[:, np.newaxis]
+            y_wrt = np.asarray(Y[:, wrt], dtype=float)[np.newaxis, :]
+            derivative_numerator = x_wrt * denominator - numerator * (
+                2.0 * y_wrt - x_wrt
+            )
+            kernel_gradient = np.divide(
+                derivative_numerator,
+                denominator**2,
+                out=np.zeros_like(derivative_numerator, dtype=float),
+                where=denominator != 0,
             )
 
         else:

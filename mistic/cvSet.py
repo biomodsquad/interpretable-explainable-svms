@@ -17,7 +17,14 @@ class cvSet:
     y : array-like of shape (n_samples,)
         Classification labels, regression targets, or one-class labels.
     num_feature_medoids : int, default=20
-        Maximum number of representative features to identify.
+        Maximum number of representative features to identify. Set to zero
+        to skip the quadratic feature-clustering initialization, which is
+        useful for high-dimensional fingerprints when medoid seeding is not
+        needed.
+    feature_medoids : array-like of int or None, default=None
+        Explicit representative feature columns used to seed forward
+        selection. When supplied, built-in feature clustering is skipped and
+        ``num_feature_medoids`` is ignored.
     ensemble_validation_size : float, default=0.0
         Fraction of samples reserved from all model-development splits.
     ensemble_validation_random_seed : int, default=0
@@ -48,6 +55,7 @@ class cvSet:
         X,
         y,
         num_feature_medoids=20,
+        feature_medoids=None,
         ensemble_validation_size=0.0,
         ensemble_validation_random_seed=0,
         ensemble_validation_stratify=False,
@@ -75,10 +83,20 @@ class cvSet:
             raise TypeError("ensemble_validation_stratify must be boolean")
         self.ensemble_validation_stratify = bool(ensemble_validation_stratify)
         self._initialize_ensemble_validation_set()
-        self.num_feature_medoids = self._validate_num_feature_medoids(num_feature_medoids)
-        self.feature_medoids_ = self._feature_medoids(
-            self.X[self.development_indices_], self.num_feature_medoids
-        )
+        if feature_medoids is None:
+            self.num_feature_medoids = self._validate_num_feature_medoids(
+                num_feature_medoids
+            )
+            self.feature_medoids_ = (
+                self._feature_medoids(
+                    self.X[self.development_indices_], self.num_feature_medoids
+                )
+                if self.num_feature_medoids
+                else np.array([], dtype=int)
+            )
+        else:
+            self.feature_medoids_ = self._validate_feature_medoids(feature_medoids)
+            self.num_feature_medoids = len(self.feature_medoids_)
 
     def __getstate__(self):
         """Return instance state for pickle serialization.
@@ -189,9 +207,23 @@ class cvSet:
         """
         if not isinstance(num_feature_medoids, (int, np.integer)):
             raise TypeError("num_feature_medoids must be an integer")
-        if num_feature_medoids < 1:
-            raise ValueError("num_feature_medoids must be at least 1")
+        if num_feature_medoids < 0:
+            raise ValueError("num_feature_medoids must be non-negative")
         return min(int(num_feature_medoids), self.X.shape[1])
+
+    def _validate_feature_medoids(self, feature_medoids):
+        """Validate explicitly supplied forward-selection seed columns."""
+        values = np.asarray(feature_medoids)
+        if values.ndim != 1:
+            raise ValueError("feature_medoids must be a one-dimensional sequence")
+        if not np.issubdtype(values.dtype, np.integer):
+            raise TypeError("feature_medoids must contain integers")
+        values = values.astype(int, copy=True)
+        if len(values) != len(np.unique(values)):
+            raise ValueError("feature_medoids must not contain duplicates")
+        if np.any((values < 0) | (values >= self.X.shape[1])):
+            raise ValueError("feature_medoids contains an out-of-range column")
+        return values
 
     @staticmethod
     def _feature_medoids(X, num_medoids, max_iter=100):
@@ -211,12 +243,28 @@ class cvSet:
         numpy.ndarray
             Sorted feature-column indices of the selected medoids.
         """
+        medoids, _ = cvSet.cluster_features(X, num_medoids, max_iter=max_iter)
+        return medoids
+
+    @staticmethod
+    def cluster_features(X, num_clusters, max_iter=100):
+        """Cluster normalized feature profiles into perturbation sets.
+
+        Returns the deterministic K-medoids representatives and a tuple of
+        feature-index arrays that partitions every input column exactly once.
+        """
+        X = np.asarray(X)
         if X.ndim != 2:
             raise ValueError("X must be a two-dimensional feature matrix")
         if X.shape[1] == 0:
             raise ValueError("X must contain at least one feature")
         if not np.issubdtype(X.dtype, np.number):
             raise TypeError("K-medoids preprocessing requires numeric features")
+
+        if not isinstance(num_clusters, (int, np.integer)):
+            raise TypeError("num_clusters must be an integer")
+        if not 1 <= num_clusters <= X.shape[1]:
+            raise ValueError("num_clusters must be between 1 and the feature count")
 
         profiles = np.asarray(X, dtype=float).T
         profiles = profiles - np.mean(profiles, axis=1, keepdims=True)
@@ -233,7 +281,7 @@ class cvSet:
         # feature having the smallest total distance to all other features.
         medoids = [int(np.argmin(np.sum(distances, axis=1)))]
         nearest_distance = distances[:, medoids[0]].copy()
-        while len(medoids) < num_medoids:
+        while len(medoids) < num_clusters:
             candidate_distance = nearest_distance.copy()
             candidate_distance[medoids] = -np.inf
             next_medoid = int(np.argmax(candidate_distance))
@@ -244,7 +292,7 @@ class cvSet:
         for _ in range(max_iter):
             labels = np.argmin(distances[:, medoids], axis=1)
             updated = medoids.copy()
-            for cluster_index in range(num_medoids):
+            for cluster_index in range(num_clusters):
                 members = np.flatnonzero(labels == cluster_index)
                 if members.size:
                     within_cluster = distances[np.ix_(members, members)]
@@ -253,7 +301,13 @@ class cvSet:
                 break
             medoids = updated
 
-        return np.sort(medoids)
+        medoids = np.sort(medoids)
+        labels = np.argmin(distances[:, medoids], axis=1)
+        groups = tuple(
+            np.flatnonzero(labels == cluster_index).astype(int)
+            for cluster_index in range(num_clusters)
+        )
+        return medoids, groups
 
     def _reset_splits(self):
         """Discard previously generated splits before configuring new ones.
