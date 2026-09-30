@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from mistic.examples.classification_benchmark_suite import (
+from experimentation.classification_benchmark_suite import (
     BenchmarkConfig,
     DatasetSpec,
     make_dataset,

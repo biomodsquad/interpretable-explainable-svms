@@ -1,6 +1,9 @@
 # Ship the curated examples and their input datasets.
 recursive-include mistic/examples *.ipynb *.csv *.data
+include CHANGELOG.md
 
-# Keep research and validation artifacts out of source distributions.
+# Keep research and validation outputs out of source distributions. The one
+# benchmark helper below is retained because the shipped test suite imports it.
 prune experimentation
+include experimentation/classification_benchmark_suite.py
 prune validation

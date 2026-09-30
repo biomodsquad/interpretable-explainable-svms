@@ -361,8 +361,7 @@ class MisticClassifier:
             ), splits,
             score_method=score_svc(weight=self.config.mistic_score_weight).score,
             kernel=kernel,
-            separate_feature_sets=not independent,
-            separate_parameters=False,
+            feature_set_policy="shared" if independent else "per_model",
             kernel_feature_selection="independent" if independent else "shared",
             perturbation_sets=perturbation_sets,
         )
