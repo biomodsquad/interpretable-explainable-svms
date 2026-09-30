@@ -16,8 +16,8 @@ from .utility import (
 __version__ = "0.1.1"
 
 __all__ = [
-    "IntegratedGradientsResult",
     "BoundaryCounterfactualResult",
+    "IntegratedGradientsResult",
     "combined_rank",
     "cvSet",
     "kernelWrapper",
