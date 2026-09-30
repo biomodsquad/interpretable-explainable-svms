@@ -11,7 +11,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from scipy.special import expit
 from sklearn.datasets import make_classification
 from sklearn.ensemble import ExtraTreesClassifier, HistGradientBoostingClassifier
@@ -44,6 +43,17 @@ from mistic import (
     score_svc,
     svmSet,
 )
+
+
+def _seaborn():
+    """Import the optional plotting dependency only when figures are requested."""
+    try:
+        import seaborn
+    except ModuleNotFoundError as error:
+        raise ImportError(
+            "benchmark plotting requires the optional 'seaborn' package"
+        ) from error
+    return seaborn
 
 
 @dataclass(frozen=True)
@@ -682,6 +692,7 @@ def _successful_seed_means(results):
 
 def plot_predictive_performance(results):
     """Plot ROC-AUC scaling across scenarios, sample sizes, and dimensions."""
+    sns = _seaborn()
     data = _successful_seed_means(results)
     grid = sns.relplot(
         data=data, x="n_samples", y="roc_auc", hue="method",
@@ -697,6 +708,7 @@ def plot_predictive_performance(results):
 
 def plot_feature_recovery(results):
     """Plot known-signal recall at k across the complete benchmark matrix."""
+    sns = _seaborn()
     data = _successful_seed_means(results)
     grid = sns.relplot(
         data=data, x="n_samples", y="signal_recall_at_k", hue="method",
@@ -712,6 +724,7 @@ def plot_feature_recovery(results):
 
 def plot_mistic_advantage(results, metric="roc_auc"):
     """Plot MISTIC minus the strongest non-MISTIC mean in every regime."""
+    sns = _seaborn()
     successful = results.loc[results["status"].eq("ok")]
     means = (successful.groupby(
         ["scenario", "n_samples", "n_features", "method"])[metric].mean()
@@ -743,6 +756,7 @@ def plot_mistic_advantage(results, metric="roc_auc"):
 
 def plot_performance_recovery_tradeoff(results):
     """Plot predictive performance against known-signal recovery."""
+    sns = _seaborn()
     data = (_successful_seed_means(results).groupby("method", as_index=False)
             [["roc_auc", "signal_recall_at_k"]].mean())
     fig, axis = plt.subplots(figsize=(9, 6), constrained_layout=True)
@@ -759,6 +773,7 @@ def plot_performance_recovery_tradeoff(results):
 
 def plot_feature_stability(results):
     """Plot mean outer-fold top-k Jaccard stability for each method."""
+    sns = _seaborn()
     data = (feature_stability(results).groupby("method", as_index=False)
             ["mean_top_k_jaccard"].mean()
             .sort_values("mean_top_k_jaccard", ascending=False))
