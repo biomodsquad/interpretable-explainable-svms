@@ -12,14 +12,15 @@ Shared setup
 
    from sklearn.svm import SVC
    from mistic import (
-       combined_rank, cvSet, kernelWrapper, paramSet, score_svc, svmSet,
+       MixedKernel, combined_rank, cvSet, kernelWrapper, paramSet, score_svc,
+       svmSet,
    )
 
    splits = cvSet(X_development, y_development)
    splits.classification(num_sets=5, random_seed=7)
 
    grid = [
-       paramSet(model={"C": C}, kernel={"gamma": gamma})
+       paramSet(model={"C": C}, kernel={"radial__gamma": gamma})
        for C in (0.5, 2.0, 8.0)
        for gamma in (2**-7, 2**-4)
    ]
@@ -29,10 +30,28 @@ Shared setup
        SVC(kernel="precomputed", class_weight="balanced"),
        splits,
        score_method=score_svc().score,
-       kernel=kernelWrapper("rbf"),
-       separate_feature_sets=True,
-       separate_parameters=True,
+       kernel=MixedKernel.weighted_sum(
+           [kernelWrapper("rbf", name="radial")], weights=[1.0]
+       ),
+       kernel_feature_selection="shared",
+       feature_set_policy="per_model",
+       unified_feature_policy="majority",
    )
+
+``feature_set_policy="per_model"`` gives every CV member its own selection
+state. The members may therefore choose different kernel/perturbation units,
+but MISTIC tunes one shared model/kernel parameter set against their aggregate
+CV performance. Use ``"shared"`` to keep the member selections synchronized.
+
+When selections are per-model, ``unified_feature_policy`` controls which
+selection units enter the final model trained on all development observations:
+
+* ``"any"`` (the default) retains a unit selected by at least one CV member;
+* ``"majority"`` retains a unit only when more than half of the members select it.
+
+Consensus is calculated over complete perturbation sets. For independent mixed
+kernels, the kernel identifier is also part of the unit, so a majority vote for
+``(linear, group_2)`` does not activate ``(radial, group_2)``.
 
 Forward selection
 -----------------
@@ -73,6 +92,56 @@ removed.
        tune_models_each_step=False,
    )
 
+Explicit medoids and kernel candidate pools
+-------------------------------------------
+
+Externally computed medoids can seed the initial forward-selection round
+without invoking MISTIC's built-in feature clustering. Medoids are original
+input-column indices. A perturbation set is eligible for the initial round
+when it contains at least one supplied medoid.
+
+.. code-block:: python
+
+   splits = cvSet(
+       X,
+       y,
+       feature_medoids=[continuous_medoid, fingerprint_medoid],
+   )
+   splits.classification(num_sets=5)
+
+For mixed-type inputs, restrict each named base kernel to its own candidate
+pool on ``svmSet``. Perturbation sets are intersected with these pools when the
+kernel-aware selection space is constructed.
+
+.. code-block:: python
+
+   mixed = MixedKernel.weighted_sum(
+       [
+           kernelWrapper("rbf", name="continuous"),
+           kernelWrapper("tanimoto", name="fingerprint"),
+       ],
+       weight_parameters=["continuous_weight", "fingerprint_weight"],
+   )
+
+   model = svmSet(
+       SVC(kernel="precomputed"),
+       splits,
+       score_svc().score,
+       kernel=mixed,
+       kernel_feature_selection="independent",
+       perturbation_sets=perturbation_sets,
+       kernel_candidate_features={
+           "continuous": continuous_columns,
+           "fingerprint": fingerprint_columns,
+       },
+   )
+
+Kernel names and column indices are validated during construction. Candidate
+pools control eligibility, while ``model.kernel_features`` continues to show
+the currently active subset for each kernel. Explicit medoids also constrain
+the initial selection units for independent mixed kernels; later forward
+rounds may add any unit in the corresponding candidate pools.
+
 Knee selection and final fitting
 --------------------------------
 
@@ -83,10 +152,14 @@ feature count:
 .. code-block:: python
 
    count = model.find_knee(metric="score")
-   model.set_num_features(count, grid)
+   model.set_num_selection_features(count, grid)
 
-The final unified model uses the ranked unified subset. Member-specific feature
-sets remain available for stability analysis and set-mode predictions.
+For mixed kernels with independent feature sets, each performance row stores
+the exact state of every CV member. Knee restoration restores those snapshots
+rather than forcing one member's units onto the others. The final unified model
+uses either the any-appearance or majority consensus configured above.
+Member-specific sets remain available for stability analysis and set-mode
+predictions.
 
 Comparing the directions
 ------------------------
@@ -102,3 +175,7 @@ features and nonlinear interactions make the path matter. Compare:
 Use the forward and backward example notebooks as executable end-to-end
 templates. For further refinement, MISTIC also provides stochastic selection,
 but greedy paths are usually easier to audit and communicate.
+
+For the distinction between kernel-specific and model-specific feature sets,
+and for the meaning of ``max_features`` in an independent mixed kernel, see
+:doc:`mixed_kernels`.

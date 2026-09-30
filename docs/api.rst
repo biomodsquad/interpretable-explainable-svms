@@ -22,7 +22,6 @@ These objects are available directly from :mod:`mistic`.
    mistic.MixedKernel
    mistic.KernelFeatureSet
    mistic.KernelFeatureSelectionState
-   mistic.MixedkernelWrapper
    mistic.parameterSpace
    mistic.uniform
    mistic.loguniform
@@ -71,3 +70,8 @@ Mixed kernels
 
 .. automodule:: mistic.mixed_kernel
    :members:
+
+``mistic.MixedkernelWrapper`` is retained as a deprecated compatibility
+constructor. New code should use :class:`mistic.MixedKernel`; see
+:doc:`tutorials/mixed_kernels` for expression construction, tunable weights,
+and kernel-specific feature sets.

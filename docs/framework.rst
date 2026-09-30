@@ -35,7 +35,7 @@ The same workflow can be expressed through MISTIC's core software objects:
       ▼
    cvSet ── reusable train/validation members
       ▼
-   kernelWrapper + sklearn SVM + paramSet grid
+   MixedKernel expression + sklearn SVM + paramSet grid
       ▼
    svmSet ── tune members and fit a unified model
       ├── perturbation ranking
@@ -53,9 +53,17 @@ Core objects
    partitioning separate from model logic.
 
 ``kernelWrapper``
-   Computes linear, polynomial, or radial-basis kernels and their gradients.
+   Computes linear, polynomial, radial-basis, sigmoid, or Tanimoto kernels and
+   their gradients. Tanimoto accepts nonnegative count or binary fingerprint
+   features and is available as a leaf in mixed-kernel expressions.
    MISTIC can therefore perturb feature groups while holding the fitted dual
    coefficients fixed.
+
+``MixedKernel``
+   Combines named kernel leaves through sums, products, nonnegative weights,
+   and positive integer powers. The same expression carries leaf-specific
+   hyperparameters, feature restrictions, analytical gradients, and
+   kernel-aware selection state.
 
 ``paramSet``
    Keeps estimator parameters, such as ``C`` or ``nu``, paired with kernel
@@ -92,7 +100,10 @@ not at all:
        estimator,
        splits,
        scorer.score,
-       kernel=kernelWrapper("rbf"),
+       kernel=MixedKernel.weighted_sum(
+           [kernelWrapper("rbf", name="radial")], weights=[1.0]
+       ),
+       kernel_feature_selection="shared",
        perturbation_sets=[[0, 1, 2], [3], [4, 5]],
        perturbation_normalization="per_feature",
    )
@@ -101,6 +112,16 @@ not at all:
 ``"sqrt"`` provides an intermediate adjustment, and ``"none"`` preserves raw
 group totals. Interpret a group rank as evidence about the group, not proof
 that every member column is individually important.
+
+Mixed-kernel feature sets
+-------------------------
+
+Feature ownership has two independent levels. With
+``kernel_feature_selection="independent"``, each named kernel leaf selects
+its own perturbation sets. With ``feature_set_policy="per_model"``, each
+cross-validation member selects its own kernel-aware state. The final model
+then uses either any-appearance or majority consensus. See
+:doc:`tutorials/mixed_kernels` for the complete construction and tuning API.
 
 Interpretation levels
 ---------------------

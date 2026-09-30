@@ -188,6 +188,35 @@ the positive-class member-set probability. The reference is part of the
 question: zero is convenient for standardized data, while a real baseline or
 cohort median may be more scientifically meaningful.
 
+Binary fingerprints
+~~~~~~~~~~~~~~~~~~~
+
+A straight continuous path passes through fractional fingerprints that are not
+valid molecular states. For binary inputs, provide ``discrete_features`` and
+an explicit reference. MISTIC then flips changed bits one at a time and
+averages their finite output increments over reproducible random feature
+orders. Each path is complete by construction.
+
+.. code-block:: python
+
+   fingerprint_columns = np.arange(X_explain.shape[1])
+   result = model.explain_integrated_gradients(
+       X_explain,
+       feature_names=bit_names,
+       reference_point=np.zeros(X_explain.shape[1]),
+       discrete_features=fingerprint_columns,
+       n_discrete_paths=16,
+       random_seed=0,
+   )
+
+The reference is required because an unconstrained continuous boundary search
+does not define a valid binary molecule. The current discrete implementation
+requires every active model feature to be binary; hybrid binary/continuous
+paths raise a clear error. Increasing ``n_discrete_paths`` reduces dependence
+on a particular feature-flip order. For Morgan fingerprints, hashed bit
+attributions identify bit positions, not unique chemical substructures unless
+the fingerprint-generation bit metadata is also retained.
+
 Triangulating evidence
 ----------------------
 

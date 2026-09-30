@@ -104,7 +104,8 @@ benchmark.
    from sklearn.preprocessing import StandardScaler
    from sklearn.svm import SVC
    from mistic import (
-       combined_rank, cvSet, kernelWrapper, paramSet, score_svc, svmSet,
+       MixedKernel, combined_rank, cvSet, kernelWrapper, paramSet, score_svc,
+       svmSet,
    )
 
    scaler = StandardScaler().fit(X_dev)
@@ -114,7 +115,7 @@ benchmark.
    splits = cvSet(X_dev_scaled, y_dev)
    splits.classification(num_sets=5, validation_size=0.2, random_seed=seed)
    grid = [
-       paramSet(model={"C": C}, kernel={"gamma": gamma})
+       paramSet(model={"C": C}, kernel={"radial__gamma": gamma})
        for C in (0.5, 2.0, 8.0)
        for gamma in (2**-7, 2**-4, 2**-1)
    ]
@@ -122,9 +123,11 @@ benchmark.
        SVC(kernel="precomputed", class_weight="balanced"),
        splits,
        score_method=score_svc().score,
-       kernel=kernelWrapper("rbf"),
-       separate_feature_sets=True,
-       separate_parameters=True,
+       kernel=MixedKernel.weighted_sum(
+           [kernelWrapper("rbf", name="radial")], weights=[1.0]
+       ),
+       kernel_feature_selection="shared",
+       feature_set_policy="per_model",
    )
    mistic_model.greedy_forward_selection(
        parameter_grid=grid,

@@ -9,6 +9,7 @@ distributed with the package.
    :maxdepth: 2
 
    svm_foundations
+   mixed_kernels
    feature_perturbation
    ranking
    feature_selection
@@ -25,8 +26,9 @@ Suggested paths
    perturbation supplies useful model-specific evidence.
 
 **Experienced SVM user**
-   Begin with :doc:`ranking` and :doc:`feature_selection`, then compare the
-   explanation types in :doc:`explanations`.
+   Begin with :doc:`mixed_kernels`, :doc:`ranking`, and
+   :doc:`feature_selection`, then compare the explanation types in
+   :doc:`explanations`.
 
 **Preparing a final analysis**
    Review :doc:`visualization` and :doc:`blind_predictions` before reporting

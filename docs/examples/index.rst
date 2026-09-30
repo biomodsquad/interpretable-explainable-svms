@@ -33,19 +33,16 @@ Classification
    Pair plots, three-dimensional views, clustered attributions, and local
    feature-attribution relationships.
 
+`Mixed kernels <https://github.com/biomodsquad/interpretable-explainable-svms/blob/main/mistic/examples/BreastCancer_mixed_kernel_simple.ipynb>`_
+   A tunable linear-plus-RBF kernel, independent kernel-feature selection,
+   blind evaluation, and integrated-gradient attribution.
+
 Regression
 ----------
 
 `Boston housing regression <https://github.com/biomodsquad/interpretable-explainable-svms/blob/main/mistic/examples/BostonHousing_regression.ipynb>`_
    Target and feature transformations, linear/RBF/polynomial SVR comparison,
    and regression feature analysis.
-
-One-class classification
-------------------------
-
-`Breast-cancer novelty detection <https://github.com/biomodsquad/interpretable-explainable-svms/blob/main/mistic/examples/BreastCancer_one_class.ipynb>`_
-   Compares both choices of inlier class under controlled splits, with blind
-   metrics, perturbation summaries, and integrated gradients.
 
 Data files
 ----------
