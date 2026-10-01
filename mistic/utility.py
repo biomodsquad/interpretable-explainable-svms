@@ -493,7 +493,9 @@ class kernelWrapper:
     Parameters
     ----------
     type : str, default="rbf"
-        Pairwise-kernel metric name.
+        Pairwise-kernel metric name. MISTIC additionally provides
+        ``"tanimoto"`` and ``"tanimoto_rbf"`` (also accepted as
+        ``"rbf_tanimoto"``).
 
     Attributes
     ----------
@@ -520,6 +522,8 @@ class kernelWrapper:
         return {
             "linear": [],
             "tanimoto": [],
+            "tanimoto_rbf": ["gamma"],
+            "rbf_tanimoto": ["gamma"],
             "rbf": ["gamma"],
             "poly": ["gamma", "degree", "coef0"],
             "polynomial": ["gamma", "degree", "coef0"],
@@ -571,25 +575,33 @@ class kernelWrapper:
             Y = []
         if parameters is None:
             parameters = {}
-        if self.type == "tanimoto":
+        if self.type in ("tanimoto", "tanimoto_rbf", "rbf_tanimoto"):
             X_selected = np.asarray(X[:, feature_index], dtype=float)
             Y_selected = X_selected if len(Y) == 0 else np.asarray(
                 Y[:, feature_index], dtype=float
             )
             if np.any(X_selected < 0) or np.any(Y_selected < 0):
-                raise ValueError("the Tanimoto kernel requires nonnegative features")
+                raise ValueError("Tanimoto-based kernels require nonnegative features")
             numerator = X_selected @ Y_selected.T
             denominator = (
                 np.sum(X_selected**2, axis=1)[:, np.newaxis]
                 + np.sum(Y_selected**2, axis=1)[np.newaxis, :]
                 - numerator
             )
-            return np.divide(
+            similarity = np.divide(
                 numerator,
                 denominator,
                 out=np.ones_like(numerator, dtype=float),
                 where=denominator != 0,
             )
+            if self.type == "tanimoto":
+                return similarity
+            gamma = parameters.get("gamma", 1.0 / len(feature_index))
+            if not isinstance(gamma, (int, float, np.integer, np.floating)):
+                raise TypeError("tanimoto_rbf gamma must be a nonnegative number")
+            if gamma < 0:
+                raise ValueError("tanimoto_rbf gamma must be nonnegative")
+            return np.exp(-float(gamma) * (1.0 - similarity))
         if len(Y) == 0:
             if not bool(parameters):
                 kernel_matrix = pairwise_kernels(X[:, feature_index], metric=self.type)
@@ -664,11 +676,11 @@ class kernelWrapper:
                 * (1.0 - K**2)
             )
 
-        elif self.type == "tanimoto":
+        elif self.type in ("tanimoto", "tanimoto_rbf", "rbf_tanimoto"):
             X_selected = np.asarray(X[:, feature_index], dtype=float)
             Y_selected = np.asarray(Y[:, feature_index], dtype=float)
             if np.any(X_selected < 0) or np.any(Y_selected < 0):
-                raise ValueError("the Tanimoto kernel requires nonnegative features")
+                raise ValueError("Tanimoto-based kernels require nonnegative features")
             numerator = X_selected @ Y_selected.T
             denominator = (
                 np.sum(X_selected**2, axis=1)[:, np.newaxis]
@@ -680,12 +692,24 @@ class kernelWrapper:
             derivative_numerator = x_wrt * denominator - numerator * (
                 2.0 * y_wrt - x_wrt
             )
-            kernel_gradient = np.divide(
+            tanimoto_gradient = np.divide(
                 derivative_numerator,
                 denominator**2,
                 out=np.zeros_like(derivative_numerator, dtype=float),
                 where=denominator != 0,
             )
+            if self.type == "tanimoto":
+                kernel_gradient = tanimoto_gradient
+            else:
+                if not isinstance(gamma, (int, float, np.integer, np.floating)):
+                    raise TypeError("tanimoto_rbf gamma must be a nonnegative number")
+                if gamma < 0:
+                    raise ValueError("tanimoto_rbf gamma must be nonnegative")
+                kernel_gradient = (
+                    float(gamma)
+                    * self.compute(X, feature_index, parameters, Y)
+                    * tanimoto_gradient
+                )
 
         else:
             raise NameError("NoGradientMethod")

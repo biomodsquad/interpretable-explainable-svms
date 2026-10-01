@@ -6,6 +6,7 @@ import runpy
 from pathlib import Path
 
 import numpy as np
+import pytest
 from sklearn.datasets import load_breast_cancer
 from sklearn.metrics import brier_score_loss, roc_auc_score
 from sklearn.preprocessing import StandardScaler
@@ -479,7 +480,13 @@ def test_integrated_gradients_satisfy_svc_decision_completeness():
     np.testing.assert_allclose(values.sum(axis=1), expected, atol=1e-10)
 
 
-def test_binary_path_attribution_requires_reference_and_is_complete():
+@pytest.mark.parametrize(
+    "kernel_type,kernel_parameters",
+    [("tanimoto", {}), ("tanimoto_rbf", {"gamma": 0.8})],
+)
+def test_binary_path_attribution_requires_reference_and_is_complete(
+    kernel_type, kernel_parameters
+):
     rng = np.random.default_rng(31)
     X = rng.integers(0, 2, size=(90, 8)).astype(float)
     y = ((X[:, 0] + X[:, 2] + X[:, 5]) >= 2).astype(int)
@@ -489,9 +496,9 @@ def test_binary_path_attribution_requires_reference_and_is_complete():
         SVC(kernel="precomputed"),
         splits,
         score_svc().score,
-        kernel=kernelWrapper("tanimoto"),
+        kernel=kernelWrapper(kernel_type),
     )
-    ensemble.tune_models([paramSet({"C": 1.0}, {})])
+    ensemble.tune_models([paramSet({"C": 1.0}, kernel_parameters)])
     explained = X[:4]
     reference = np.zeros(X.shape[1])
 

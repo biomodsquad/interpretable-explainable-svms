@@ -11,6 +11,8 @@ beta is published for evaluation before the stable 0.2 release.
   weights, and positive integer powers.
 - Named and tunable base-kernel parameters and mixture weights.
 - Tanimoto kernels for nonnegative count and binary fingerprint features.
+- RBF-Tanimoto kernels that exponentiate Tanimoto distance with a tunable
+  ``gamma`` parameter.
 - Kernel-specific candidate feature pools and independently selectable
   `(kernel, perturbation set)` units.
 - Shared or per-cross-validation-model selection states, with any-appearance

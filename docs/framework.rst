@@ -53,9 +53,11 @@ Core objects
    partitioning separate from model logic.
 
 ``kernelWrapper``
-   Computes linear, polynomial, radial-basis, sigmoid, or Tanimoto kernels and
-   their gradients. Tanimoto accepts nonnegative count or binary fingerprint
-   features and is available as a leaf in mixed-kernel expressions.
+   Computes linear, polynomial, radial-basis, sigmoid, Tanimoto, or
+   RBF-Tanimoto kernels and their gradients. Tanimoto-based kernels accept
+   nonnegative count or binary fingerprint features and are available as
+   leaves in mixed-kernel expressions. RBF-Tanimoto exponentiates Tanimoto
+   distance rather than Euclidean distance.
    MISTIC can therefore perturb feature groups while holding the fitted dual
    coefficients fixed.
 

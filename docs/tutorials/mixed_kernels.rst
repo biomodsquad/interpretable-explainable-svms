@@ -81,6 +81,37 @@ all compatible leaves. Named parameters are clearest and are recommended for
 mixed expressions. Weights must remain nonnegative; if a convex combination
 is intended, construct the grid so the weights also sum to one.
 
+RBF over Tanimoto distance
+--------------------------
+
+``kernelWrapper("tanimoto_rbf")`` implements an exponential kernel over
+Tanimoto distance rather than the usual squared Euclidean distance:
+
+.. math::
+
+   K(x, y) = \exp\{-\gamma [1 - T(x, y)]\}.
+
+Here ``T`` is Tanimoto similarity for nonnegative binary or count features.
+This differs from multiplying independent RBF and Tanimoto leaves. ``gamma``
+must be a nonnegative number; the scikit-learn strings ``"scale"`` and
+``"auto"`` are not used because this distance is already normalized.
+
+.. code-block:: python
+
+   fingerprint_kernel = kernelWrapper("tanimoto_rbf", name="fingerprint")
+   grid = [
+       paramSet(
+           model={"C": C},
+           kernel={"fingerprint__gamma": gamma},
+       )
+       for C in (0.1, 1.0, 10.0)
+       for gamma in (0.1, 0.3, 1.0, 3.0, 10.0)
+   ]
+
+The leaf can be used alone or inside any :class:`~mistic.MixedKernel`
+expression. The alias ``"rbf_tanimoto"`` is accepted, but
+``"tanimoto_rbf"`` is the canonical spelling.
+
 Using a mixed kernel in ``svmSet``
 ----------------------------------
 

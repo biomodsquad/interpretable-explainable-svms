@@ -102,6 +102,65 @@ def test_tanimoto_gradient_matches_finite_difference():
     np.testing.assert_allclose(analytical, numerical, rtol=2e-5, atol=2e-6)
 
 
+def test_tanimoto_rbf_uses_tanimoto_distance_and_handles_empty_vectors():
+    X = np.array([[1, 0, 1], [1, 1, 0], [0, 0, 0]], dtype=float)
+    gamma = 0.7
+    actual = kernelWrapper("tanimoto_rbf").compute(
+        X, [0, 1, 2], {"gamma": gamma}
+    )
+    tanimoto = kernelWrapper("tanimoto").compute(X, [0, 1, 2])
+    expected = np.exp(-gamma * (1.0 - tanimoto))
+    np.testing.assert_allclose(actual, expected)
+    np.testing.assert_allclose(np.diag(actual), 1.0)
+
+
+@pytest.mark.parametrize("kernel_type", ["tanimoto_rbf", "rbf_tanimoto"])
+def test_tanimoto_rbf_gradient_matches_finite_difference(kernel_type):
+    X = np.array([[0.2, 0.0, 1.0], [1.0, 0.5, 0.1]])
+    Y = np.array([[0.4, 0.7, 0.3], [0.8, 0.2, 0.6]])
+    kernel = kernelWrapper(kernel_type)
+    parameters = {"gamma": 0.8}
+    epsilon = 1e-6
+    plus, minus = Y.copy(), Y.copy()
+    plus[:, 1] += epsilon
+    minus[:, 1] -= epsilon
+    numerical = (
+        kernel.compute(X, [0, 1, 2], parameters, plus)
+        - kernel.compute(X, [0, 1, 2], parameters, minus)
+    ) / (2 * epsilon)
+    analytical = kernel.compute_gradient(X, [0, 1, 2], 1, parameters, Y)
+    np.testing.assert_allclose(analytical, numerical, rtol=2e-5, atol=2e-6)
+
+
+def test_tanimoto_rbf_validates_gamma_and_nonnegative_features():
+    kernel = kernelWrapper("tanimoto_rbf")
+    with pytest.raises(ValueError, match="nonnegative features"):
+        kernel.compute(np.array([[1.0, -1.0]]), [0, 1], {"gamma": 1.0})
+    with pytest.raises(ValueError, match="gamma must be nonnegative"):
+        kernel.compute(np.array([[1.0, 0.0]]), [0, 1], {"gamma": -1.0})
+    with pytest.raises(TypeError, match="gamma must be a nonnegative number"):
+        kernel.compute(np.array([[1.0, 0.0]]), [0, 1], {"gamma": "scale"})
+
+
+def test_tanimoto_rbf_routes_named_gamma_in_mixed_expression():
+    X = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]])
+    Y = np.array([[1.0, 1.0, 0.0]])
+    expression = MixedKernel.weighted_sum(
+        [
+            kernelWrapper("tanimoto_rbf", name="fingerprint"),
+            kernelWrapper("linear", name="linear"),
+        ],
+        weights=[0.75, 0.25],
+    )
+    parameters = {"fingerprint__gamma": 0.6}
+    actual = expression.compute(X, [0, 1, 2], parameters, Y)
+    expected = 0.75 * kernelWrapper("tanimoto_rbf").compute(
+        X, [0, 1, 2], {"gamma": 0.6}, Y
+    )
+    expected += 0.25 * kernelWrapper("linear").compute(X, [0, 1, 2], {}, Y)
+    np.testing.assert_allclose(actual, expected)
+
+
 def test_tanimoto_rejects_negative_features():
     with pytest.raises(ValueError, match="nonnegative"):
         kernelWrapper("tanimoto").compute(np.array([[1.0, -1.0]]), [0, 1])
